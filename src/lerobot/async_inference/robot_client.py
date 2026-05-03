@@ -33,12 +33,15 @@ python src/lerobot/async_inference/robot_client.py \
 ```
 """
 
+import json
 import logging
+import os
 import pickle  # nosec
+import re
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pprint import pformat
 from queue import Queue
 from typing import Any
@@ -78,6 +81,359 @@ from .helpers import (
     map_robot_keys_to_lerobot_features,
     visualize_action_queue_size,
 )
+
+
+@dataclass(frozen=True)
+class PolicyCandidate:
+    policy_id: str
+    policy_type: str
+    pretrained_name_or_path: str
+    description: str = ""
+
+
+@dataclass(frozen=True)
+class RouteDecision:
+    policy_id: str
+    task_for_policy: str
+    confidence: float
+    reason: str
+    router_model: str = "keyword"
+
+
+def _load_policy_candidates_from_manifest() -> tuple[list[PolicyCandidate], str | None]:
+    manifest_path = os.environ.get("LEROBOT_POLICY_MANIFEST", "").strip()
+    if not manifest_path:
+        return [], None
+
+    if not os.path.exists(manifest_path):
+        raise FileNotFoundError(f"LEROBOT_POLICY_MANIFEST does not exist: {manifest_path}")
+
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+
+    candidates = []
+    for item in manifest.get("policies", []):
+        candidates.append(
+            PolicyCandidate(
+                policy_id=item["id"],
+                policy_type=item.get("policy_type", "xvla"),
+                pretrained_name_or_path=item["pretrained_name_or_path"],
+                description=item.get("description", ""),
+            )
+        )
+
+    default_policy_id = manifest.get("default_policy_id")
+    if default_policy_id is None and candidates:
+        default_policy_id = candidates[0].policy_id
+
+    return candidates, default_policy_id
+
+
+def _extract_first_image(raw_observation: dict[str, Any]) -> Any | None:
+    """Try to extract camera image from LeRobot raw observation.
+
+    Works with common keys:
+      - image
+      - observation.images.image
+      - any key containing 'image'
+    """
+    preferred_keys = [
+        "image",
+        "observation.images.image",
+        "observation.image",
+    ]
+
+    for key in preferred_keys:
+        if key in raw_observation:
+            return raw_observation[key]
+
+    for key, value in raw_observation.items():
+        if "image" in key.lower():
+            return value
+
+    return None
+
+
+def _to_pil_image(image: Any) -> Any | None:
+    if image is None:
+        return None
+
+    try:
+        from PIL import Image
+        import numpy as np
+    except Exception:
+        return None
+
+    if isinstance(image, Image.Image):
+        return image
+
+    if torch.is_tensor(image):
+        arr = image.detach().cpu()
+
+        # Remove batch dimension if present.
+        if arr.ndim == 4:
+            arr = arr[0]
+
+        # CHW -> HWC
+        if arr.ndim == 3 and arr.shape[0] in (1, 3, 4):
+            arr = arr.permute(1, 2, 0)
+
+        arr = arr.numpy()
+
+    else:
+        arr = np.asarray(image)
+
+    if arr.ndim == 2:
+        pass
+    elif arr.ndim == 3 and arr.shape[-1] == 1:
+        arr = arr[..., 0]
+    elif arr.ndim == 3 and arr.shape[-1] >= 3:
+        arr = arr[..., :3]
+    else:
+        return None
+
+    if arr.dtype != np.uint8:
+        arr = arr.astype(np.float32)
+        if arr.max() <= 1.0:
+            arr = arr * 255.0
+        arr = arr.clip(0, 255).astype(np.uint8)
+
+    return Image.fromarray(arr)
+
+
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    """Extract first JSON-looking object from model output."""
+    matches = re.findall(r"\{.*?\}", text, flags=re.DOTALL)
+    for m in reversed(matches):
+        try:
+            return json.loads(m)
+        except Exception:
+            continue
+    return None
+
+
+class KeywordPolicyRouter:
+    """Safe fallback router.
+
+    It does not understand images.
+    It chooses by matching instruction against policy_id and description.
+    """
+
+    def __init__(self, candidates: list[PolicyCandidate], default_policy_id: str | None):
+        self.candidates = candidates
+        self.default_policy_id = default_policy_id or (candidates[0].policy_id if candidates else "__default__")
+
+    def select(self, instruction: str, raw_observation: dict[str, Any] | None = None) -> RouteDecision:
+        text = instruction.lower().strip()
+
+        best_policy_id = self.default_policy_id
+        best_score = -1
+
+        for c in self.candidates:
+            haystack = f"{c.policy_id} {c.description}".lower()
+            score = 0
+
+            # policy_id 직접 입력하면 가장 강하게 매칭.
+            if c.policy_id.lower() in text:
+                score += 100
+
+            # description 단어 매칭.
+            for token in re.split(r"[\s,./|:;(){}\[\]_-]+", haystack):
+                token = token.strip()
+                if len(token) >= 2 and token in text:
+                    score += 1
+
+            if score > best_score:
+                best_score = score
+                best_policy_id = c.policy_id
+
+        confidence = 0.5 if best_score <= 0 else min(0.95, 0.5 + 0.05 * best_score)
+
+        return RouteDecision(
+            policy_id=best_policy_id,
+            task_for_policy=instruction,
+            confidence=confidence,
+            reason=f"keyword_score={best_score}",
+            router_model="keyword",
+        )
+
+
+class SmolVLMPolicyRouter:
+    """SmolVLM based policy router.
+
+    Enable with:
+        export LEROBOT_USE_SMOLVLM_ROUTER=1
+        export LEROBOT_ROUTER_MODEL=HuggingFaceTB/SmolVLM-256M-Instruct
+    """
+
+    def __init__(
+        self,
+        candidates: list[PolicyCandidate],
+        default_policy_id: str | None,
+        model_name_or_path: str,
+        device: str = "cuda",
+    ):
+        self.candidates = candidates
+        self.default_policy_id = default_policy_id or (candidates[0].policy_id if candidates else "__default__")
+        self.model_name_or_path = model_name_or_path
+        self.device = device
+        self.fallback = KeywordPolicyRouter(candidates, self.default_policy_id)
+
+        from transformers import AutoProcessor
+
+        try:
+            from transformers import AutoModelForImageTextToText as AutoModel
+        except Exception:
+            from transformers import AutoModelForVision2Seq as AutoModel
+
+        dtype = torch.bfloat16 if device.startswith("cuda") else torch.float32
+
+        self.processor = AutoProcessor.from_pretrained(model_name_or_path, trust_remote_code=True)
+        self.model = AutoModel.from_pretrained(
+            model_name_or_path,
+            torch_dtype=dtype,
+            trust_remote_code=True,
+        ).to(device)
+        self.model.eval()
+
+    def _build_prompt(self, instruction: str) -> str:
+        policies_text = "\n".join(
+            [
+                f"- {c.policy_id}: {c.description or c.pretrained_name_or_path}"
+                for c in self.candidates
+            ]
+        )
+
+        return f"""
+You are a robot policy router.
+
+Your job:
+Choose exactly one policy_id from the available policies.
+Use the user instruction and the camera image.
+If uncertain, choose {self.default_policy_id}.
+
+Available policies:
+{policies_text}
+
+User instruction:
+{instruction}
+
+Return JSON only.
+Schema:
+{{
+  "policy_id": "one of the available policy ids",
+  "task_for_policy": "short command to send to the robot policy",
+  "confidence": 0.0,
+  "reason": "short reason"
+}}
+""".strip()
+
+    @torch.inference_mode()
+    def select(self, instruction: str, raw_observation: dict[str, Any] | None = None) -> RouteDecision:
+        raw_observation = raw_observation or {}
+        image = _extract_first_image(raw_observation)
+        pil_image = _to_pil_image(image)
+
+        if pil_image is None:
+            return self.fallback.select(instruction, raw_observation)
+
+        prompt = self._build_prompt(instruction)
+
+        try:
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image"},
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ]
+
+            try:
+                text = self.processor.apply_chat_template(
+                    messages,
+                    add_generation_prompt=True,
+                )
+                inputs = self.processor(
+                    text=text,
+                    images=[pil_image],
+                    return_tensors="pt",
+                )
+            except Exception:
+                inputs = self.processor(
+                    images=pil_image,
+                    text=prompt,
+                    return_tensors="pt",
+                )
+
+            inputs = {
+                k: v.to(self.device) if torch.is_tensor(v) else v
+                for k, v in inputs.items()
+            }
+
+            generated_ids = self.model.generate(
+                **inputs,
+                max_new_tokens=160,
+                do_sample=False,
+            )
+
+            output_text = self.processor.decode(
+                generated_ids[0],
+                skip_special_tokens=True,
+            )
+
+            obj = _extract_json_object(output_text)
+            if obj is None:
+                return self.fallback.select(instruction, raw_observation)
+
+            policy_id = str(obj.get("policy_id", self.default_policy_id)).strip()
+
+            valid_ids = {c.policy_id for c in self.candidates}
+            if policy_id not in valid_ids:
+                policy_id = self.default_policy_id
+
+            confidence = float(obj.get("confidence", 0.5))
+            confidence = max(0.0, min(1.0, confidence))
+
+            return RouteDecision(
+                policy_id=policy_id,
+                task_for_policy=str(obj.get("task_for_policy", instruction)),
+                confidence=confidence,
+                reason=str(obj.get("reason", "")),
+                router_model=self.model_name_or_path,
+            )
+
+        except Exception as e:
+            logging.warning(f"SmolVLM router failed. Falling back to keyword router: {e}")
+            return self.fallback.select(instruction, raw_observation)
+
+
+def _build_router(
+    candidates: list[PolicyCandidate],
+    default_policy_id: str | None,
+):
+    use_smolvlm = os.environ.get("LEROBOT_USE_SMOLVLM_ROUTER", "0").strip() == "1"
+
+    if not use_smolvlm:
+        return KeywordPolicyRouter(candidates, default_policy_id)
+
+    model_name_or_path = os.environ.get(
+        "LEROBOT_ROUTER_MODEL",
+        "HuggingFaceTB/SmolVLM-256M-Instruct",
+    )
+    device = os.environ.get("LEROBOT_ROUTER_DEVICE", "cuda")
+
+    try:
+        return SmolVLMPolicyRouter(
+            candidates=candidates,
+            default_policy_id=default_policy_id,
+            model_name_or_path=model_name_or_path,
+            device=device,
+        )
+    except Exception as e:
+        logging.warning(f"Could not initialize SmolVLM router. Using keyword router. Error: {e}")
+        return KeywordPolicyRouter(candidates, default_policy_id)
 
 
 class RobotClient:
@@ -136,6 +492,41 @@ class RobotClient:
         self.must_go = threading.Event()
         self.must_go.set()  # Initially set - observations qualify for direct processing
 
+        # Dynamic policy routing.
+        self.policy_candidates, manifest_default_policy_id = _load_policy_candidates_from_manifest()
+
+        if not self.policy_candidates:
+            # Manifest가 없으면 기존 단일 모델 호환.
+            self.policy_candidates = [
+                PolicyCandidate(
+                    policy_id="__default__",
+                    policy_type=config.policy_type,
+                    pretrained_name_or_path=config.pretrained_name_or_path,
+                    description="Default single policy",
+                )
+            ]
+            manifest_default_policy_id = "__default__"
+
+        self.route_lock = threading.Lock()
+        self.current_policy_id = manifest_default_policy_id or self.policy_candidates[0].policy_id
+        self.current_task_text = config.task
+        self.current_router_confidence = 1.0
+        self.current_router_reason = "initial"
+        self.current_router_model = "initial"
+
+        self.latest_raw_observation_lock = threading.Lock()
+        self.latest_raw_observation: dict[str, Any] | None = None
+
+        self.router = _build_router(
+            candidates=self.policy_candidates,
+            default_policy_id=self.current_policy_id,
+        )
+
+        self.logger.info(
+            f"[router] initialized | current_policy_id={self.current_policy_id} | "
+            f"candidates={[c.policy_id for c in self.policy_candidates]}"
+        )
+
     @property
     def running(self):
         return not self.shutdown_event.is_set()
@@ -179,6 +570,88 @@ class RobotClient:
 
         self.channel.close()
         self.logger.debug("Client stopped, channel closed")
+
+    def _update_latest_raw_observation(self, raw_observation: RawObservation) -> None:
+        with self.latest_raw_observation_lock:
+            self.latest_raw_observation = dict(raw_observation)
+
+    def _get_latest_raw_observation(self) -> dict[str, Any] | None:
+        with self.latest_raw_observation_lock:
+            if self.latest_raw_observation is None:
+                return None
+            return dict(self.latest_raw_observation)
+
+    def _flush_action_queue_for_policy_switch(self) -> None:
+        """Drop old action chunks when policy changes.
+
+        Without this, actions generated by the previous policy may continue executing
+        for several control steps.
+        """
+        with self.action_queue_lock:
+            self.action_queue = Queue()
+            self.action_chunk_size = -1
+
+        self.must_go.set()
+        self.logger.info("[router] action queue flushed due to policy/task switch")
+
+    def set_route(self, route: RouteDecision) -> None:
+        with self.route_lock:
+            old_policy_id = self.current_policy_id
+            old_task_text = self.current_task_text
+
+            self.current_policy_id = route.policy_id
+            self.current_task_text = route.task_for_policy
+            self.current_router_confidence = route.confidence
+            self.current_router_reason = route.reason
+            self.current_router_model = route.router_model
+
+        if old_policy_id != route.policy_id or old_task_text != route.task_for_policy:
+            self._flush_action_queue_for_policy_switch()
+
+        self.logger.info(
+            f"[router] selected policy_id={route.policy_id} | "
+            f"confidence={route.confidence:.3f} | "
+            f"task={route.task_for_policy} | "
+            f"reason={route.reason}"
+        )
+
+    def prompt_router_loop(self):
+        """Keyboard instruction loop.
+
+        Type an instruction while the robot is running.
+        The router selects a policy_id and updates task text dynamically.
+
+        Commands:
+          :q / quit / exit -> stop client
+          :policies -> print available policies
+        """
+        self.logger.info("[router] prompt loop started. Type instruction and press Enter.")
+
+        while self.running:
+            try:
+                user_instruction = input("\n[router] instruction> ").strip()
+            except EOFError:
+                break
+            except KeyboardInterrupt:
+                self.shutdown_event.set()
+                break
+
+            if not user_instruction:
+                continue
+
+            if user_instruction in {":q", "quit", "exit"}:
+                self.shutdown_event.set()
+                break
+
+            if user_instruction == ":policies":
+                print("\nAvailable policies:")
+                for c in self.policy_candidates:
+                    print(f"  - {c.policy_id}: {c.description}")
+                continue
+
+            latest_obs = self._get_latest_raw_observation()
+            route = self.router.select(user_instruction, latest_obs)
+            self.set_route(route)
 
     def send_observation(
         self,
@@ -407,53 +880,77 @@ class RobotClient:
 
     def control_loop_observation(self, task: str, verbose: bool = False) -> RawObservation:
         try:
-            # Get serialized observation bytes from the function
             start_time = time.perf_counter()
 
             raw_observation: RawObservation = self.robot.get_observation()
-            raw_observation["task"] = task
+
+            # Keep latest camera frame for SmolVLM router.
+            self._update_latest_raw_observation(raw_observation)
+
+            # Read current dynamic route.
+            with self.route_lock:
+                current_task_text = self.current_task_text or task
+                current_policy_id = self.current_policy_id
+                current_router_confidence = self.current_router_confidence
+                current_router_reason = self.current_router_reason
+                current_router_model = self.current_router_model
+
+            # VLA policy still receives task text.
+            raw_observation["task"] = current_task_text
+
+            # Server uses this to select already-loaded policy slot.
+            raw_observation["policy_id"] = current_policy_id
+            raw_observation["router_confidence"] = current_router_confidence
+            raw_observation["router_reason"] = current_router_reason
+            raw_observation["router_model"] = current_router_model
 
             with self.latest_action_lock:
                 latest_action = self.latest_action
 
             observation = TimedObservation(
-                timestamp=time.time(),  # need time.time() to compare timestamps across client and server
+                timestamp=time.time(),
                 observation=raw_observation,
                 timestep=max(latest_action, 0),
             )
 
             obs_capture_time = time.perf_counter() - start_time
 
-            # If there are no actions left in the queue, the observation must go through processing!
+            # If there are no actions left in the queue, the observation must go through processing.
             with self.action_queue_lock:
                 observation.must_go = self.must_go.is_set() and self.action_queue.empty()
                 current_queue_size = self.action_queue.qsize()
 
             _ = self.send_observation(observation)
 
-            self.logger.debug(f"QUEUE SIZE: {current_queue_size} (Must go: {observation.must_go})")
+            self.logger.debug(
+                f"QUEUE SIZE: {current_queue_size} "
+                f"(Must go: {observation.must_go}, policy_id={current_policy_id})"
+            )
+
             if observation.must_go:
-                # must-go event will be set again after receiving actions
                 self.must_go.clear()
 
             if verbose:
-                # Calculate comprehensive FPS metrics
                 fps_metrics = self.fps_tracker.calculate_fps_metrics(observation.get_timestamp())
 
                 self.logger.info(
                     f"Obs #{observation.get_timestep()} | "
+                    f"Policy: {current_policy_id} | "
+                    f"Task: {current_task_text} | "
                     f"Avg FPS: {fps_metrics['avg_fps']:.2f} | "
                     f"Target: {fps_metrics['target_fps']:.2f}"
                 )
 
                 self.logger.debug(
-                    f"Ts={observation.get_timestamp():.6f} | Capturing observation took {obs_capture_time:.6f}s"
+                    f"Ts={observation.get_timestamp():.6f} | "
+                    f"Capturing observation took {obs_capture_time:.6f}s"
                 )
 
             return raw_observation
 
         except Exception as e:
             self.logger.error(f"Error in observation sender: {e}")
+            raise
 
     def control_loop(self, task: str, verbose: bool = False) -> tuple[Observation, Action]:
         """Combined function for executing actions and streaming observations"""
@@ -497,8 +994,12 @@ def async_client(cfg: RobotClientConfig):
         # Create and start action receiver thread
         action_receiver_thread = threading.Thread(target=client.receive_actions, daemon=True)
 
-        # Start action receiver thread
+        # Keyboard/VLM router thread.
+        prompt_router_thread = threading.Thread(target=client.prompt_router_loop, daemon=True)
+
+        # Start threads
         action_receiver_thread.start()
+        prompt_router_thread.start()
 
         try:
             # The main thread runs the control loop

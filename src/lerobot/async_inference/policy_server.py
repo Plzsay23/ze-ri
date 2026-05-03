@@ -24,12 +24,14 @@ python -m lerobot.async_inference.policy_server \
 ```
 """
 
+import json
 import logging
+import os
 import pickle  # nosec
 import threading
 import time
 from concurrent import futures
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pprint import pformat
 from queue import Empty, Queue
 from typing import Any
@@ -61,6 +63,18 @@ from .helpers import (
 )
 
 
+@dataclass
+class LoadedPolicySlot:
+    policy_id: str
+    policy_type: str
+    pretrained_name_or_path: str
+    device: str
+    actions_per_chunk: int
+    policy: Any
+    preprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]]
+    postprocessor: PolicyProcessorPipeline[PolicyAction, PolicyAction]
+
+
 class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
     prefix = "policy_server"
     logger = get_logger(prefix)
@@ -79,7 +93,8 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
         self.last_processed_obs = None
 
-        # Attributes will be set by SendPolicyInstructions
+        # Attributes will be set by SendPolicyInstructions.
+        # 기존 단일 policy 호환 필드.
         self.device = None
         self.policy_type = None
         self.lerobot_features = None
@@ -88,12 +103,19 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         self.preprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]] | None = None
         self.postprocessor: PolicyProcessorPipeline[PolicyAction, PolicyAction] | None = None
 
+        # Multi-policy slots.
+        # LEROBOT_POLICY_MANIFEST가 있으면 여기에 여러 정책을 모두 VRAM에 올린다.
+        self.policies: dict[str, LoadedPolicySlot] = {}
+        self.default_policy_id: str | None = None
+
     @property
     def running(self):
         return not self.shutdown_event.is_set()
 
     @property
     def policy_image_features(self):
+        if self.policy is None:
+            return None
         return self.policy.config.image_features
 
     def _reset_server(self) -> None:
@@ -112,6 +134,201 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         self.shutdown_event.clear()
 
         return services_pb2.Empty()
+
+    def _read_policy_manifest(self) -> dict[str, Any] | None:
+        """Read multi-policy manifest from LEROBOT_POLICY_MANIFEST.
+
+        If env is not set, server behaves exactly like the original single-policy server.
+        """
+        manifest_path = os.environ.get("LEROBOT_POLICY_MANIFEST", "").strip()
+        if not manifest_path:
+            return None
+
+        if not os.path.exists(manifest_path):
+            raise FileNotFoundError(f"LEROBOT_POLICY_MANIFEST does not exist: {manifest_path}")
+
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+
+        if "policies" not in manifest or not isinstance(manifest["policies"], list):
+            raise ValueError("Policy manifest must contain a list field: policies")
+
+        if len(manifest["policies"]) == 0:
+            raise ValueError("Policy manifest policies list is empty")
+
+        return manifest
+
+    def _load_policy_slot(
+        self,
+        *,
+        policy_id: str,
+        policy_type: str,
+        pretrained_name_or_path: str,
+        device: str,
+        actions_per_chunk: int,
+        rename_map: dict[str, str] | None,
+    ) -> LoadedPolicySlot:
+        """Load one policy and its processors to GPU/target device."""
+        if policy_type not in SUPPORTED_POLICIES:
+            raise ValueError(
+                f"Policy type {policy_type} not supported. Supported policies: {SUPPORTED_POLICIES}"
+            )
+
+        self.logger.info(
+            f"[multi-policy] Loading policy_id={policy_id} | "
+            f"type={policy_type} | path={pretrained_name_or_path} | device={device}"
+        )
+
+        policy_class = get_policy_class(policy_type)
+
+        start = time.perf_counter()
+        policy = policy_class.from_pretrained(pretrained_name_or_path)
+        policy.to(device)
+        policy.eval()
+
+        device_override = {"device": device}
+        preprocessor, postprocessor = make_pre_post_processors(
+            policy.config,
+            pretrained_path=pretrained_name_or_path,
+            preprocessor_overrides={
+                "device_processor": device_override,
+                "rename_observations_processor": {"rename_map": rename_map or {}},
+            },
+            postprocessor_overrides={"device_processor": device_override},
+        )
+        elapsed = time.perf_counter() - start
+
+        self.logger.info(
+            f"[multi-policy] Loaded policy_id={policy_id} to {device} in {elapsed:.4f}s"
+        )
+
+        return LoadedPolicySlot(
+            policy_id=policy_id,
+            policy_type=policy_type,
+            pretrained_name_or_path=pretrained_name_or_path,
+            device=device,
+            actions_per_chunk=actions_per_chunk,
+            policy=policy,
+            preprocessor=preprocessor,
+            postprocessor=postprocessor,
+        )
+
+    def _setup_policy_slots(self, policy_specs: RemotePolicyConfig) -> None:
+        """Setup single-policy or multi-policy mode.
+
+        Multi-policy mode is enabled by env:
+            LEROBOT_POLICY_MANIFEST=/path/to/xvla_manifest.json
+
+        The client still sends RemotePolicyConfig once because the existing gRPC API expects it.
+        We reuse its lerobot_features, actions_per_chunk, device, and rename_map.
+        """
+        self.device = policy_specs.device
+        self.policy_type = policy_specs.policy_type
+        self.lerobot_features = policy_specs.lerobot_features
+        self.actions_per_chunk = policy_specs.actions_per_chunk
+
+        rename_map = getattr(policy_specs, "rename_map", {}) or {}
+
+        manifest = self._read_policy_manifest()
+
+        self.policies.clear()
+
+        if manifest is None:
+            # Original behavior, but stored as a single slot.
+            slot = self._load_policy_slot(
+                policy_id="__default__",
+                policy_type=policy_specs.policy_type,
+                pretrained_name_or_path=policy_specs.pretrained_name_or_path,
+                device=policy_specs.device,
+                actions_per_chunk=policy_specs.actions_per_chunk,
+                rename_map=rename_map,
+            )
+            self.policies[slot.policy_id] = slot
+            self.default_policy_id = slot.policy_id
+
+        else:
+            default_policy_id = manifest.get("default_policy_id")
+            policies = manifest["policies"]
+
+            for entry in policies:
+                policy_id = entry["id"]
+                policy_type = entry.get("policy_type", policy_specs.policy_type)
+                pretrained_name_or_path = entry["pretrained_name_or_path"]
+                device = entry.get("device", policy_specs.device)
+                actions_per_chunk = int(entry.get("actions_per_chunk", policy_specs.actions_per_chunk))
+
+                if policy_id in self.policies:
+                    raise ValueError(f"Duplicated policy id in manifest: {policy_id}")
+
+                slot = self._load_policy_slot(
+                    policy_id=policy_id,
+                    policy_type=policy_type,
+                    pretrained_name_or_path=pretrained_name_or_path,
+                    device=device,
+                    actions_per_chunk=actions_per_chunk,
+                    rename_map=rename_map,
+                )
+                self.policies[policy_id] = slot
+
+            if default_policy_id is None:
+                default_policy_id = policies[0]["id"]
+
+            if default_policy_id not in self.policies:
+                raise ValueError(
+                    f"default_policy_id={default_policy_id} is not in loaded policies: "
+                    f"{list(self.policies.keys())}"
+                )
+
+            self.default_policy_id = default_policy_id
+
+        # Keep legacy fields pointing to default slot.
+        default_slot = self.policies[self.default_policy_id]
+        self.policy = default_slot.policy
+        self.preprocessor = default_slot.preprocessor
+        self.postprocessor = default_slot.postprocessor
+
+        self.logger.info(
+            f"[multi-policy] Ready. default_policy_id={self.default_policy_id} | "
+            f"loaded={list(self.policies.keys())}"
+        )
+
+    def _select_policy_slot(self, observation_t: TimedObservation) -> LoadedPolicySlot:
+        """Select policy by observation['policy_id'].
+
+        If missing or invalid, fall back to default_policy_id.
+        """
+        if not self.policies:
+            raise RuntimeError("No policy loaded. Did client call SendPolicyInstructions?")
+
+        raw_obs = observation_t.get_observation()
+        requested_policy_id = raw_obs.get("policy_id", None)
+
+        policy_id = requested_policy_id or self.default_policy_id
+
+        if policy_id not in self.policies:
+            self.logger.warning(
+                f"[multi-policy] Unknown policy_id={policy_id}. "
+                f"Fallback to default_policy_id={self.default_policy_id}."
+            )
+            policy_id = self.default_policy_id
+
+        return self.policies[policy_id]
+
+    @staticmethod
+    def _strip_routing_keys(raw_observation: dict[str, Any]) -> dict[str, Any]:
+        """Remove router-only keys before LeRobot preprocessor.
+
+        'task' must remain because VLA policies usually consume it.
+        """
+        obs = dict(raw_observation)
+        for key in [
+            "policy_id",
+            "router_confidence",
+            "router_reason",
+            "router_model",
+        ]:
+            obs.pop(key, None)
+        return obs
 
     def SendPolicyInstructions(self, request, context):  # noqa: N802
         """Receive policy instructions from the robot client"""
@@ -141,32 +358,13 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             f"Device: {policy_specs.device}"
         )
 
-        self.device = policy_specs.device
-        self.policy_type = policy_specs.policy_type  # act, pi0, etc.
-        self.lerobot_features = policy_specs.lerobot_features
-        self.actions_per_chunk = policy_specs.actions_per_chunk
-
-        policy_class = get_policy_class(self.policy_type)
-
         start = time.perf_counter()
-        self.policy = policy_class.from_pretrained(policy_specs.pretrained_name_or_path)
-        self.policy.to(self.device)
-
-        # Load preprocessor and postprocessor, overriding device to match requested device
-        device_override = {"device": self.device}
-        self.preprocessor, self.postprocessor = make_pre_post_processors(
-            self.policy.config,
-            pretrained_path=policy_specs.pretrained_name_or_path,
-            preprocessor_overrides={
-                "device_processor": device_override,
-                "rename_observations_processor": {"rename_map": policy_specs.rename_map},
-            },
-            postprocessor_overrides={"device_processor": device_override},
-        )
-
+        self._setup_policy_slots(policy_specs)
         end = time.perf_counter()
 
-        self.logger.info(f"Time taken to put policy on {self.device}: {end - start:.4f} seconds")
+        self.logger.info(
+            f"Time taken to setup policy slot(s) on device(s): {end - start:.4f} seconds"
+        )
 
         return services_pb2.Empty()
 
@@ -267,6 +465,22 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
     def _obs_sanity_checks(self, obs: TimedObservation, previous_obs: TimedObservation) -> bool:
         """Check if the observation is valid to be processed by the policy"""
+
+        current_raw = obs.get_observation()
+        previous_raw = previous_obs.get_observation()
+
+        # 정책이나 task가 바뀌면 이미지가 비슷해도 반드시 새 inference를 돌려야 한다.
+        if current_raw.get("policy_id") != previous_raw.get("policy_id"):
+            self.logger.info(
+                f"[multi-policy] policy_id changed: "
+                f"{previous_raw.get('policy_id')} -> {current_raw.get('policy_id')}"
+            )
+            return True
+
+        if current_raw.get("task") != previous_raw.get("task"):
+            self.logger.info("[multi-policy] task text changed. Force processing.")
+            return True
+
         with self._predicted_timesteps_lock:
             predicted_timesteps = self._predicted_timesteps
 
@@ -319,13 +533,17 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             for i, action in enumerate(action_chunk)
         ]
 
-    def _get_action_chunk(self, observation: dict[str, torch.Tensor]) -> torch.Tensor:
-        """Get an action chunk from the policy. The chunk contains only"""
-        chunk = self.policy.predict_action_chunk(observation)
+    def _get_action_chunk(
+        self,
+        slot: LoadedPolicySlot,
+        observation: dict[str, torch.Tensor],
+    ) -> torch.Tensor:
+        """Get an action chunk from the selected policy slot."""
+        chunk = slot.policy.predict_action_chunk(observation)
         if chunk.ndim != 3:
-            chunk = chunk.unsqueeze(0)  # adding batch dimension, now shape is (B, chunk_size, action_dim)
+            chunk = chunk.unsqueeze(0)  # now shape is (B, chunk_size, action_dim)
 
-        return chunk[:, : self.actions_per_chunk, :]
+        return chunk[:, : slot.actions_per_chunk, :]
 
     def _predict_action_chunk(self, observation_t: TimedObservation) -> list[TimedAction]:
         """Predict an action chunk based on an observation.
@@ -337,27 +555,33 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         4. Apply postprocessor (unnormalization, device movement)
         5. Convert to TimedAction list
         """
+        slot = self._select_policy_slot(observation_t)
+
         """1. Prepare observation"""
         start_prepare = time.perf_counter()
+        raw_observation = self._strip_routing_keys(observation_t.get_observation())
+
         observation: Observation = raw_observation_to_observation(
-            observation_t.get_observation(),
+            raw_observation,
             self.lerobot_features,
-            self.policy_image_features,
+            slot.policy.config.image_features,
         )
         prepare_time = time.perf_counter() - start_prepare
 
         """2. Apply preprocessor"""
         start_preprocess = time.perf_counter()
-        observation = self.preprocessor(observation)
+        observation = slot.preprocessor(observation)
         self.last_processed_obs: TimedObservation = observation_t
         preprocessing_time = time.perf_counter() - start_preprocess
 
         """3. Get action chunk"""
         start_inference = time.perf_counter()
-        action_tensor = self._get_action_chunk(observation)
+        action_tensor = self._get_action_chunk(slot, observation)
         inference_time = time.perf_counter() - start_inference
         self.logger.info(
-            f"Preprocessing and inference took {inference_time:.4f}s, action shape: {action_tensor.shape}"
+            f"[multi-policy] policy_id={slot.policy_id} | "
+            f"Preprocessing and inference took {inference_time:.4f}s, "
+            f"action shape: {action_tensor.shape}"
         )
 
         """4. Apply postprocessor"""
@@ -372,7 +596,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         for i in range(chunk_size):
             # Extract action at timestep i: (B, action_dim)
             single_action = action_tensor[:, i, :]
-            processed_action = self.postprocessor(single_action)
+            processed_action = slot.postprocessor(single_action)
             processed_actions.append(processed_action)
 
         # Stack back to (B, chunk_size, action_dim), then remove batch dim
