@@ -554,30 +554,13 @@ class RobotClient:
         self.home_return_seconds = float(os.environ.get("LEROBOT_HOME_RETURN_SECONDS", "3.0"))
         self.home_return_fps = float(os.environ.get("LEROBOT_HOME_RETURN_FPS", "25"))
 
-        # 시작 시점의 관절 위치를 home pose로 저장한다.
-        # 이후 LEROBOT_HOME_POSE_JSON이 있으면 그 값으로 덮어쓴다.
+        # Home pose 우선순위:
+        # 1. LEROBOT_HOME_POSE_JSON 이 있으면 무조건 그 값만 사용
+        # 2. 없을 때만 시작 시점 관절 위치를 home pose로 사용
         self.home_action_dict: dict[str, float] | None = None
 
-        try:
-            initial_obs = self.robot.get_observation()
-            self._update_latest_raw_observation(initial_obs)
-
-            self.home_action_dict = self._extract_action_dict_from_observation(initial_obs)
-
-            if self.home_action_dict is not None:
-                self.logger.info(f"[stop-home] captured startup home pose: {self.home_action_dict}")
-            else:
-                self.logger.warning(
-                    "[stop-home] failed to capture startup home pose from initial observation. "
-                    "Stop will pause inference, but home return may be skipped unless "
-                    "LEROBOT_HOME_POSE_JSON is provided."
-                )
-
-        except Exception as e:
-            self.logger.warning(f"[stop-home] failed to capture initial home pose: {e}")
-
-        # 고정 home pose JSON이 있으면 시작 자세 대신 이 값을 사용한다.
         fixed_home_pose_path = os.environ.get("LEROBOT_HOME_POSE_JSON", "").strip()
+
         if fixed_home_pose_path:
             try:
                 fixed_home_pose_path = os.path.expanduser(fixed_home_pose_path)
@@ -590,18 +573,43 @@ class RobotClient:
                     for k, v in fixed_home_pose.items()
                 }
 
-                self.logger.info(
-                    f"[stop-home] loaded fixed home pose from {fixed_home_pose_path}: "
+                self.logger.warning(
+                    f"[stop-home] USING FIXED HOME POSE from {fixed_home_pose_path}: "
                     f"{self.home_action_dict}"
                 )
 
             except Exception as e:
-                self.logger.error(f"[stop-home] failed to load fixed home pose: {e}")
+                self.home_action_dict = None
+                self.logger.error(
+                    f"[stop-home] failed to load fixed home pose from "
+                    f"{fixed_home_pose_path}: {e}"
+                )
 
-        self.logger.info(
+        else:
+            try:
+                initial_obs = self.robot.get_observation()
+                self._update_latest_raw_observation(initial_obs)
+
+                self.home_action_dict = self._extract_action_dict_from_observation(initial_obs)
+
+                if self.home_action_dict is not None:
+                    self.logger.warning(
+                        f"[stop-home] USING STARTUP OBSERVATION AS HOME POSE: "
+                        f"{self.home_action_dict}"
+                    )
+                else:
+                    self.logger.warning(
+                        "[stop-home] failed to capture startup home pose. "
+                        "Stop will pause inference, but home return may be skipped."
+                    )
+
+            except Exception as e:
+                self.logger.warning(f"[stop-home] failed to capture startup home pose: {e}")
+
+        self.logger.warning(
             f"[stop-home] home_return_seconds={self.home_return_seconds}, "
             f"home_return_fps={self.home_return_fps}, "
-            f"home_action_dict_ready={self.home_action_dict is not None}"
+            f"home_action_dict={self.home_action_dict}"
         )
 
     @property
@@ -821,6 +829,12 @@ class RobotClient:
             self.logger.warning(
                 f"[stop-home] returning home slowly | "
                 f"seconds={self.home_return_seconds}, steps={steps}"
+            )
+            self.logger.warning(
+                f"[stop-home] HOME TARGET DICT = {self.home_action_dict}"
+            )
+            self.logger.warning(
+                f"[stop-home] CURRENT START DICT = {current_action_dict}"
             )
 
             for step in range(steps):
