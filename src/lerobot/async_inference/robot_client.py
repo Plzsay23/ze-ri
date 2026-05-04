@@ -448,9 +448,13 @@ class RobotClient:
         """
         # Store configuration
         self.config = config
+
+        # Connect robot
         self.robot = make_robot_from_config(config.robot)
         self.robot.connect()
 
+        # Debug robot feature keys.
+        # stop-home 복귀 / action dict 매핑 확인용.
         self.logger.info(f"[debug] robot.action_features = {self.robot.action_features}")
         self.logger.info(f"[debug] robot.observation_features = {self.robot.observation_features}")
 
@@ -466,8 +470,10 @@ class RobotClient:
             config.actions_per_chunk,
             config.policy_device,
         )
+
         self.channel = grpc.insecure_channel(
-            self.server_address, grpc_channel_options(initial_backoff=f"{config.environment_dt:.4f}s")
+            self.server_address,
+            grpc_channel_options(initial_backoff=f"{config.environment_dt:.4f}s"),
         )
         self.stub = services_pb2_grpc.AsyncInferenceStub(self.channel)
         self.logger.info(f"Initializing client to connect to server at {self.server_address}")
@@ -491,13 +497,17 @@ class RobotClient:
 
         self.logger.info("Robot connected and ready")
 
-        # Use an event for thread-safe coordination
+        # Use an event for thread-safe coordination.
         self.must_go = threading.Event()
         self.must_go.set()  # Initially set - observations qualify for direct processing
 
+        # ---------------------------------------------------------------------
+        # Dynamic policy routing
+        # ---------------------------------------------------------------------
+        # 첫 instruction이 들어오기 전에는 control_loop가 서버로 observation을 보내지 못하게 막는다.
+        # prompt_router_loop()에서 set_route()가 호출되면 set된다.
         self.route_ready_event = threading.Event()
 
-        # Dynamic policy routing.
         self.policy_candidates, manifest_default_policy_id = _load_policy_candidates_from_manifest()
 
         if not self.policy_candidates:
@@ -514,7 +524,10 @@ class RobotClient:
 
         self.route_lock = threading.Lock()
         self.current_policy_id = manifest_default_policy_id or self.policy_candidates[0].policy_id
-        self.current_task_text = ""
+
+        # route_ready_event가 막고 있으므로 초기 task가 있어도 바로 실행되지는 않는다.
+        # 첫 instruction 입력 후 set_route()에서 실제 task_for_policy가 들어간다.
+        self.current_task_text = config.task
         self.current_router_confidence = 1.0
         self.current_router_reason = "initial"
         self.current_router_model = "initial"
@@ -527,7 +540,14 @@ class RobotClient:
             default_policy_id=self.current_policy_id,
         )
 
-        # Stop / home-return control.
+        self.logger.info(
+            f"[router] initialized | current_policy_id={self.current_policy_id} | "
+            f"candidates={[c.policy_id for c in self.policy_candidates]}"
+        )
+
+        # ---------------------------------------------------------------------
+        # Stop / home-return control
+        # ---------------------------------------------------------------------
         self.stop_requested_event = threading.Event()
         self.home_return_running_event = threading.Event()
 
@@ -535,25 +555,53 @@ class RobotClient:
         self.home_return_fps = float(os.environ.get("LEROBOT_HOME_RETURN_FPS", "25"))
 
         # 시작 시점의 관절 위치를 home pose로 저장한다.
-        # action_features와 observation key가 맞으면 자동 저장된다.
+        # 이후 LEROBOT_HOME_POSE_JSON이 있으면 그 값으로 덮어쓴다.
         self.home_action_dict: dict[str, float] | None = None
+
         try:
             initial_obs = self.robot.get_observation()
             self._update_latest_raw_observation(initial_obs)
+
             self.home_action_dict = self._extract_action_dict_from_observation(initial_obs)
+
             if self.home_action_dict is not None:
-                self.logger.info(f"[stop-home] captured home pose: {self.home_action_dict}")
+                self.logger.info(f"[stop-home] captured startup home pose: {self.home_action_dict}")
             else:
                 self.logger.warning(
-                    "[stop-home] failed to capture home pose from initial observation. "
-                    "Stop will pause inference, but home return may be skipped."
+                    "[stop-home] failed to capture startup home pose from initial observation. "
+                    "Stop will pause inference, but home return may be skipped unless "
+                    "LEROBOT_HOME_POSE_JSON is provided."
                 )
+
         except Exception as e:
             self.logger.warning(f"[stop-home] failed to capture initial home pose: {e}")
 
+        # 고정 home pose JSON이 있으면 시작 자세 대신 이 값을 사용한다.
+        fixed_home_pose_path = os.environ.get("LEROBOT_HOME_POSE_JSON", "").strip()
+        if fixed_home_pose_path:
+            try:
+                fixed_home_pose_path = os.path.expanduser(fixed_home_pose_path)
+
+                with open(fixed_home_pose_path, "r", encoding="utf-8") as f:
+                    fixed_home_pose = json.load(f)
+
+                self.home_action_dict = {
+                    str(k): float(v)
+                    for k, v in fixed_home_pose.items()
+                }
+
+                self.logger.info(
+                    f"[stop-home] loaded fixed home pose from {fixed_home_pose_path}: "
+                    f"{self.home_action_dict}"
+                )
+
+            except Exception as e:
+                self.logger.error(f"[stop-home] failed to load fixed home pose: {e}")
+
         self.logger.info(
-            f"[router] initialized | current_policy_id={self.current_policy_id} | "
-            f"candidates={[c.policy_id for c in self.policy_candidates]}"
+            f"[stop-home] home_return_seconds={self.home_return_seconds}, "
+            f"home_return_fps={self.home_return_fps}, "
+            f"home_action_dict_ready={self.home_action_dict is not None}"
         )
 
     @property
