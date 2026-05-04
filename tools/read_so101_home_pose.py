@@ -4,13 +4,13 @@ import argparse
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import torch
 
 from lerobot.robots import make_robot_from_config
 from lerobot.robots import so_follower  # noqa: F401
-from lerobot.robots.so_follower.config_so_follower import SOFollowerConfig
 from lerobot.utils.import_utils import register_third_party_plugins
 
 
@@ -49,22 +49,18 @@ def flatten_state(value: Any) -> list[float] | None:
         return None
 
 
-def get_action_feature_keys(robot) -> list[str]:
-    action_features = robot.action_features
-
-    if isinstance(action_features, dict):
-        return list(action_features.keys())
-
-    return list(action_features)
+def get_feature_keys(features: Any) -> list[str]:
+    if isinstance(features, dict):
+        return list(features.keys())
+    return list(features)
 
 
 def extract_pose_from_observation(robot, obs: dict[str, Any]) -> dict[str, float]:
-    action_keys = get_action_feature_keys(robot)
+    action_keys = get_feature_keys(robot.action_features)
 
     pose: dict[str, float] = {}
     missing: list[str] = []
 
-    # 1. action key와 observation key가 직접 같은 경우
     for key in action_keys:
         candidates = [
             key,
@@ -88,7 +84,6 @@ def extract_pose_from_observation(robot, obs: dict[str, Any]) -> dict[str, float
     if len(pose) == len(action_keys):
         return pose
 
-    # 2. observation.state 또는 state 벡터에서 순서대로 읽는 경우
     for state_key in ["observation.state", "state"]:
         if state_key not in obs:
             continue
@@ -116,12 +111,35 @@ def average_poses(poses: list[dict[str, float]]) -> dict[str, float]:
         raise ValueError("poses is empty")
 
     keys = list(poses[0].keys())
-    avg = {}
+    return {
+        key: sum(p[key] for p in poses) / len(poses)
+        for key in keys
+    }
 
-    for key in keys:
-        avg[key] = sum(p[key] for p in poses) / len(poses)
 
-    return avg
+def make_so101_robot_config(args) -> SimpleNamespace:
+    """Mimic the config.robot object created by the normal draccus CLI.
+
+    Your working CLI produced robot fields like:
+      type=so101_follower
+      port=/dev/ttyACM0
+      id=follower
+      calibration_dir=None
+      cameras={}
+      disable_torque_on_disconnect=True
+      max_relative_target=None
+      use_degrees=True
+    """
+    return SimpleNamespace(
+        type="so101_follower",
+        port=args.port,
+        id=args.id,
+        calibration_dir=None,
+        cameras={},
+        disable_torque_on_disconnect=True,
+        max_relative_target=None,
+        use_degrees=True,
+    )
 
 
 def main():
@@ -129,7 +147,7 @@ def main():
 
     parser.add_argument("--port", type=str, required=True)
     parser.add_argument("--id", type=str, default="follower")
-    parser.add_argument("--samples", type=int, default=5)
+    parser.add_argument("--samples", type=int, default=10)
     parser.add_argument("--interval", type=float, default=0.2)
     parser.add_argument(
         "--output",
@@ -141,20 +159,16 @@ def main():
 
     register_third_party_plugins()
 
-    cfg = SOFollowerConfig(
-        port=args.port,
-    )
-
-    setattr(cfg, "type", "so101_follower")
-    setattr(cfg, "id", args.id if hasattr(args, "id") else "follower")
-
-    robot = make_robot_from_config(cfg)
+    robot_config = make_so101_robot_config(args)
+    robot = make_robot_from_config(robot_config)
 
     print("[INFO] Connecting robot...")
     robot.connect()
 
     try:
         print("[INFO] Connected.")
+        print()
+
         print("[INFO] robot.action_features:")
         print(robot.action_features)
         print()
@@ -163,7 +177,7 @@ def main():
         print(robot.observation_features)
         print()
 
-        poses = []
+        poses: list[dict[str, float]] = []
 
         for i in range(args.samples):
             obs = robot.get_observation()
