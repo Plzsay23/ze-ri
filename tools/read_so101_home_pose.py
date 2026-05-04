@@ -128,7 +128,6 @@ def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--port", type=str, required=True)
-    parser.add_argument("--id", type=str, default="follower")
     parser.add_argument("--samples", type=int, default=5)
     parser.add_argument("--interval", type=float, default=0.2)
     parser.add_argument(
@@ -143,7 +142,6 @@ def main():
 
     cfg = SOFollowerConfig(
         port=args.port,
-        id=args.id,
     )
 
     robot = make_robot_from_config(cfg)
