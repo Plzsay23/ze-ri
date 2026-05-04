@@ -451,6 +451,9 @@ class RobotClient:
         self.robot = make_robot_from_config(config.robot)
         self.robot.connect()
 
+        self.logger.info(f"[debug] robot.action_features = {self.robot.action_features}")
+        self.logger.info(f"[debug] robot.observation_features = {self.robot.observation_features}")
+
         lerobot_features = map_robot_keys_to_lerobot_features(self.robot)
 
         # Use environment variable if server_address is not provided in config
@@ -524,6 +527,30 @@ class RobotClient:
             default_policy_id=self.current_policy_id,
         )
 
+        # Stop / home-return control.
+        self.stop_requested_event = threading.Event()
+        self.home_return_running_event = threading.Event()
+
+        self.home_return_seconds = float(os.environ.get("LEROBOT_HOME_RETURN_SECONDS", "3.0"))
+        self.home_return_fps = float(os.environ.get("LEROBOT_HOME_RETURN_FPS", "25"))
+
+        # 시작 시점의 관절 위치를 home pose로 저장한다.
+        # action_features와 observation key가 맞으면 자동 저장된다.
+        self.home_action_dict: dict[str, float] | None = None
+        try:
+            initial_obs = self.robot.get_observation()
+            self._update_latest_raw_observation(initial_obs)
+            self.home_action_dict = self._extract_action_dict_from_observation(initial_obs)
+            if self.home_action_dict is not None:
+                self.logger.info(f"[stop-home] captured home pose: {self.home_action_dict}")
+            else:
+                self.logger.warning(
+                    "[stop-home] failed to capture home pose from initial observation. "
+                    "Stop will pause inference, but home return may be skipped."
+                )
+        except Exception as e:
+            self.logger.warning(f"[stop-home] failed to capture initial home pose: {e}")
+
         self.logger.info(
             f"[router] initialized | current_policy_id={self.current_policy_id} | "
             f"candidates={[c.policy_id for c in self.policy_candidates]}"
@@ -596,6 +623,180 @@ class RobotClient:
         self.must_go.set()
         self.logger.info("[router] action queue flushed due to policy/task switch")
 
+    @staticmethod
+    def _to_float_scalar(value: Any) -> float | None:
+        try:
+            if torch.is_tensor(value):
+                value = value.detach().cpu()
+                if value.numel() == 1:
+                    return float(value.item())
+                return None
+
+            if isinstance(value, (int, float)):
+                return float(value)
+
+            if isinstance(value, list) and len(value) == 1:
+                return float(value[0])
+
+            if isinstance(value, tuple) and len(value) == 1:
+                return float(value[0])
+
+            return float(value)
+        except Exception:
+            return None
+
+    def _extract_action_dict_from_observation(
+        self,
+        raw_observation: dict[str, Any],
+    ) -> dict[str, float] | None:
+        """Extract current robot joint/action values from raw observation.
+
+        robot.send_action() expects keys from self.robot.action_features.
+        We try:
+          1. raw_observation[action_key]
+          2. raw_observation["observation.state"] vector
+          3. raw_observation["state"] vector
+        """
+        action_keys = list(self.robot.action_features)
+
+        action_dict: dict[str, float] = {}
+        missing_keys: list[str] = []
+
+        # Case 1: each action feature exists directly in observation.
+        for key in action_keys:
+            candidates = [
+                key,
+                f"observation.{key}",
+                f"observation.state.{key}",
+                key.replace("action.", "observation."),
+            ]
+
+            found = False
+            for cand in candidates:
+                if cand in raw_observation:
+                    value = self._to_float_scalar(raw_observation[cand])
+                    if value is not None:
+                        action_dict[key] = value
+                        found = True
+                        break
+
+            if not found:
+                missing_keys.append(key)
+
+        if len(action_dict) == len(action_keys):
+            return action_dict
+
+        # Case 2: state vector exists.
+        for state_key in ["observation.state", "state"]:
+            if state_key not in raw_observation:
+                continue
+
+            state = raw_observation[state_key]
+
+            try:
+                if torch.is_tensor(state):
+                    state_list = state.detach().cpu().flatten().tolist()
+                else:
+                    state_list = list(state)
+
+                if len(state_list) >= len(action_keys):
+                    return {
+                        key: float(state_list[i])
+                        for i, key in enumerate(action_keys)
+                    }
+            except Exception:
+                pass
+
+        self.logger.warning(
+            f"[stop-home] could not map observation to action dict. "
+            f"action_keys={action_keys}, missing={missing_keys}, "
+            f"available_obs_keys={sorted(list(raw_observation.keys()))}"
+        )
+        return None
+
+    def _request_stop_and_home(self) -> None:
+        """Stop current inference/action stream and request slow return to home."""
+        self.logger.warning("[stop-home] STOP requested")
+
+        # 새 정책 실행 준비 상태를 내린다.
+        # control_loop는 이 값이 내려가면 새 observation을 서버로 보내지 않는다.
+        self.route_ready_event.clear()
+
+        # 수신/대기 중인 action chunk 폐기.
+        with self.action_queue_lock:
+            self.action_queue = Queue()
+            self.action_chunk_size = -1
+
+        self.must_go.clear()
+        self.stop_requested_event.set()
+
+    def _run_home_return_blocking(self) -> None:
+        """Slowly return robot to startup home pose.
+
+        This runs inside control_loop thread.
+        While this runs:
+          - policy inference is paused
+          - received action chunks are discarded
+          - robot is commanded directly with interpolated joint values
+        """
+        if self.home_return_running_event.is_set():
+            return
+
+        self.home_return_running_event.set()
+
+        try:
+            if self.home_action_dict is None:
+                self.logger.error(
+                    "[stop-home] home_action_dict is None. "
+                    "Cannot return home. Inference remains paused."
+                )
+                return
+
+            with self.action_queue_lock:
+                self.action_queue = Queue()
+                self.action_chunk_size = -1
+
+            current_obs = self.robot.get_observation()
+            current_action_dict = self._extract_action_dict_from_observation(current_obs)
+
+            if current_action_dict is None:
+                self.logger.error(
+                    "[stop-home] could not read current joint state. "
+                    "Cannot interpolate to home."
+                )
+                return
+
+            action_keys = list(self.robot.action_features)
+            steps = max(1, int(self.home_return_seconds * self.home_return_fps))
+            dt = 1.0 / max(1.0, self.home_return_fps)
+
+            self.logger.warning(
+                f"[stop-home] returning home slowly | "
+                f"seconds={self.home_return_seconds}, steps={steps}"
+            )
+
+            for step in range(steps):
+                if not self.running:
+                    break
+
+                alpha = (step + 1) / steps
+
+                action = {}
+                for key in action_keys:
+                    start = float(current_action_dict[key])
+                    target = float(self.home_action_dict[key])
+                    action[key] = start + alpha * (target - start)
+
+                self.robot.send_action(action)
+                time.sleep(dt)
+
+            self.logger.warning("[stop-home] home return finished. Waiting for next instruction.")
+
+        finally:
+            self.stop_requested_event.clear()
+            self.home_return_running_event.clear()
+            self.must_go.set()
+
     def set_route(self, route: RouteDecision) -> None:
         with self.route_lock:
             old_policy_id = self.current_policy_id
@@ -646,6 +847,10 @@ class RobotClient:
             if user_instruction in {":q", "quit", "exit"}:
                 self.shutdown_event.set()
                 break
+
+            if user_instruction.lower() in {"stop", "정지", "멈춰", "home", "홈"}:
+                self._request_stop_and_home()
+                continue
 
             if user_instruction == ":policies":
                 print("\nAvailable policies:")
@@ -806,12 +1011,17 @@ class RobotClient:
                         f"Deserialization time: {deserialize_time * 1000:.2f}ms"
                     )
 
+                # Stop/home 중이거나 첫 instruction 대기 중이면 서버에서 온 action chunk를 버린다.
+                if self.stop_requested_event.is_set() or self.home_return_running_event.is_set() or not self.route_ready_event.is_set():
+                    self.logger.warning("[stop-home] discarding received action chunk")
+                    continue
+
                 # Update action queue
                 start_time = time.perf_counter()
                 self._aggregate_action_queues(timed_actions, self.config.aggregate_fn)
                 queue_update_time = time.perf_counter() - start_time
 
-                self.must_go.set()  # after receiving actions, next empty queue triggers must-go processing!
+                self.must_go.set()
 
                 if verbose:
                     # Get queue state after changes
@@ -979,6 +1189,27 @@ class RobotClient:
 
         while self.running:
             control_loop_start = time.perf_counter()
+
+            # stop 명령이 들어오면 정책 action 실행/observation 송신을 모두 멈추고
+            # home pose로 천천히 복귀한다.
+            if self.stop_requested_event.is_set():
+                self._run_home_return_blocking()
+
+                self.logger.info(
+                    "[router] Waiting for next instruction after stop. "
+                    "Type at [router] instruction> to resume."
+                )
+
+                while self.running and not self.route_ready_event.is_set():
+                    time.sleep(0.05)
+
+                continue
+
+            # 첫 instruction 전이거나 stop 후 다음 instruction 대기 중이면 아무것도 보내지 않는다.
+            if not self.route_ready_event.is_set():
+                time.sleep(0.05)
+                continue
+
             """Control loop: (1) Performing actions, when available"""
             if self.actions_available():
                 _performed_action = self.control_loop_action(verbose)
@@ -988,7 +1219,6 @@ class RobotClient:
                 _captured_observation = self.control_loop_observation(task, verbose)
 
             self.logger.debug(f"Control loop (ms): {(time.perf_counter() - control_loop_start) * 1000:.2f}")
-            # Dynamically adjust sleep time to maintain the desired control frequency
             time.sleep(max(0, self.config.environment_dt - (time.perf_counter() - control_loop_start)))
 
         return _captured_observation, _performed_action
