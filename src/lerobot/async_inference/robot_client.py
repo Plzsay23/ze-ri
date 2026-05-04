@@ -492,6 +492,8 @@ class RobotClient:
         self.must_go = threading.Event()
         self.must_go.set()  # Initially set - observations qualify for direct processing
 
+        self.route_ready_event = threading.Event()
+
         # Dynamic policy routing.
         self.policy_candidates, manifest_default_policy_id = _load_policy_candidates_from_manifest()
 
@@ -509,7 +511,7 @@ class RobotClient:
 
         self.route_lock = threading.Lock()
         self.current_policy_id = manifest_default_policy_id or self.policy_candidates[0].policy_id
-        self.current_task_text = config.task
+        self.current_task_text = ""
         self.current_router_confidence = 1.0
         self.current_router_reason = "initial"
         self.current_router_model = "initial"
@@ -607,6 +609,8 @@ class RobotClient:
 
         if old_policy_id != route.policy_id or old_task_text != route.task_for_policy:
             self._flush_action_queue_for_policy_switch()
+
+        self.route_ready_event.set()
 
         self.logger.info(
             f"[router] selected policy_id={route.policy_id} | "
@@ -956,6 +960,18 @@ class RobotClient:
         """Combined function for executing actions and streaming observations"""
         # Wait at barrier for synchronized start
         self.start_barrier.wait()
+
+        self.logger.info(
+            "[router] Waiting for first instruction. "
+            "Type at [router] instruction> to start policy execution."
+        )
+
+        while self.running and not self.route_ready_event.is_set():
+            time.sleep(0.05)
+
+        if not self.running:
+            return None, None
+
         self.logger.info("Control loop thread starting")
 
         _performed_action = None
