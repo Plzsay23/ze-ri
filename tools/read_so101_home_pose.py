@@ -144,6 +144,8 @@ def main():
         port=args.port,
     )
 
+    setattr(cfg, "type", "so101_follower")
+
     robot = make_robot_from_config(cfg)
 
     print("[INFO] Connecting robot...")
