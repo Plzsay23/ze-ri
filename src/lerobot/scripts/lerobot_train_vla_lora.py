@@ -51,8 +51,6 @@ python -m lerobot.scripts.lerobot_train_vla_lora \
   --peft.lora_dropout=0.05
 """
 
-from __future__ import annotations
-
 import dataclasses
 import logging
 import time
