@@ -81,13 +81,13 @@ dependencies = [
     "safetensors>=0.4.3,<1.0.0",
 
     # Lightweight utilities
-    "packaging>=24.2,<26.0",
+    "packaging>=24.2,<26.3",
     "termcolor>=2.4.0,<4.0.0",
     "tqdm>=4.66.0,<5.0.0",
 
     # Build tools (required by opencv-python-headless on some platforms)
     "cmake>=3.29.0.1,<4.2.0",
-    "setuptools>=71.0.0,<81.0.0",
+    "setuptools>=71.0.0,<=81.0.0",
 ]
 
 # Optional dependencies
