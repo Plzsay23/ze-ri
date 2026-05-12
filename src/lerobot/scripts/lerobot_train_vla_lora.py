@@ -30,6 +30,12 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from accelerate import Accelerator
 
+warnings.filterwarnings(
+    "ignore",
+    message=r".*AttentionMaskConverter.*",
+    category=FutureWarning,
+)
+
 # ---------------------------------------------------------------------
 # Very early noise/dependency guards.
 # Must run before importing LeRobot, diffusers, transformers, etc.
@@ -220,7 +226,7 @@ def _setup_quiet_logging(accelerator=None) -> None:
 # ---------------------------------------------------------------------
 
 def _force_pyav_video_decoder() -> None:
-    """Force dataset video decoding to use PyAV instead of torchvision VideoReader."""
+    """Force dataset video decoding to use memory-safe PyAV seeking."""
     try:
         import av
         import numpy as np
@@ -250,39 +256,49 @@ def _force_pyav_video_decoder() -> None:
             return torch.empty((0, 3, 0, 0), dtype=torch.uint8)
 
         path = str(video_path)
-        container = av.open(path)
-        stream = container.streams.video[0]
-
-        time_base = float(stream.time_base) if stream.time_base is not None else None
-        avg_rate = float(stream.average_rate) if stream.average_rate is not None else None
-
-        decoded_times = []
-        decoded_frames = []
-
-        for idx, frame in enumerate(container.decode(stream)):
-            if frame.pts is not None and time_base is not None:
-                t = float(frame.pts * time_base)
-            elif avg_rate and avg_rate > 0:
-                t = float(idx / avg_rate)
-            else:
-                t = float(idx)
-
-            decoded_times.append(t)
-            decoded_frames.append(frame.to_rgb().to_ndarray())
-
-        container.close()
-
-        if not decoded_frames:
-            raise RuntimeError(f"No frames decoded from video: {path}")
-
-        times = np.asarray(decoded_times, dtype=np.float64)
-        selected = []
+        frames = []
 
         for ts in query_ts:
-            nearest_idx = int(np.argmin(np.abs(times - ts)))
-            selected.append(decoded_frames[nearest_idx])
+            container = av.open(path)
+            stream = container.streams.video[0]
 
-        array = np.stack(selected, axis=0)  # [T,H,W,C]
+            # timestamp 기준 seek. PyAV seek offset은 time_base 단위.
+            time_base = float(stream.time_base) if stream.time_base is not None else 1.0 / 30.0
+            seek_pts = max(int(ts / time_base), 0)
+
+            try:
+                container.seek(seek_pts, any_frame=False, backward=True, stream=stream)
+            except Exception:
+                container.seek(0)
+
+            best_frame = None
+            best_dt = float("inf")
+
+            for frame in container.decode(stream):
+                if frame.pts is not None and stream.time_base is not None:
+                    frame_t = float(frame.pts * stream.time_base)
+                elif stream.average_rate is not None:
+                    frame_t = 0.0
+                else:
+                    frame_t = 0.0
+
+                dt = abs(frame_t - ts)
+                if dt < best_dt:
+                    best_dt = dt
+                    best_frame = frame
+
+                # timestamp를 지나쳤고 충분히 가까운 프레임을 찾았으면 종료
+                if frame_t >= ts and best_frame is not None:
+                    break
+
+            if best_frame is None:
+                container.close()
+                raise RuntimeError(f"No frame decoded near timestamp={ts} from video={path}")
+
+            frames.append(best_frame.to_rgb().to_ndarray())
+            container.close()
+
+        array = np.stack(frames, axis=0)  # [T,H,W,C]
         return torch.from_numpy(array).permute(0, 3, 1, 2).contiguous()
 
     video_utils.decode_video_frames = _decode_video_frames_pyav
@@ -607,7 +623,7 @@ def train_vla_lora(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" =
 
     cfg.validate()
 
-    _force_pyav_video_decoder()
+    # _force_pyav_video_decoder()
 
     policy_type = str(cfg.policy.type).lower()
     if policy_type not in SUPPORTED_LORA_POLICIES:
