@@ -42,41 +42,81 @@ os.environ.setdefault("DIFFUSERS_VERBOSITY", "error")
 
 
 def _install_flash_attn_import_stub() -> None:
-    """Provide a safe import-time flash_attn stub.
+    """Provide a safe import-time flash_attn package stub.
 
-    Reason:
-    Some policy registries eagerly import XVLA/FLORENCE code while parsing even if
-    the current target is not XVLA. On Jetson/Thor envs flash-attn may be installed
-    but unusable due CUDA runtime library mismatch.
+    This is intentionally an import-time compatibility shim. It lets modules that
+    merely import flash_attn symbols continue loading in environments where a
+    broken flash_attn wheel is installed. If the model actually calls one of the
+    flash-attn kernels, the stub raises a clear error.
 
-    The stub includes __spec__ so importlib.util.find_spec("flash_attn") used by
-    diffusers does not raise:
-        ValueError: flash_attn.__spec__ is None
+    The stub must behave like a package because XVLA/Florence imports:
+        flash_attn.flash_attn_interface
+        flash_attn.bert_padding
     """
-    if "flash_attn" in sys.modules and getattr(sys.modules["flash_attn"], "__spec__", None) is not None:
+    existing = sys.modules.get("flash_attn")
+    if existing is not None and getattr(existing, "__spec__", None) is not None:
+        # If a real package was already imported successfully, keep it.
         return
-
-    flash_attn_mod = types.ModuleType("flash_attn")
-    flash_attn_interface_mod = types.ModuleType("flash_attn.flash_attn_interface")
-
-    flash_attn_mod.__spec__ = importlib.machinery.ModuleSpec("flash_attn", loader=None)
-    flash_attn_interface_mod.__spec__ = importlib.machinery.ModuleSpec(
-        "flash_attn.flash_attn_interface", loader=None
-    )
 
     def _not_available(*args, **kwargs):
         raise ImportError(
-            "flash_attn is unavailable in this runtime. "
-            "Use a non-flash attention path or install a CUDA-compatible flash-attn build."
+            "flash_attn kernel was called, but flash_attn is unavailable or CUDA-incompatible. "
+            "Install a working flash-attn build or switch the model to a non-flash attention path."
         )
+
+    def _index_first_axis(x, indices):
+        # Fallback used by some non-kernel paths.
+        return x[indices]
+
+    def _unpad_input(hidden_states, attention_mask):
+        # Minimal Python fallback following the common flash_attn.bert_padding API.
+        import torch
+
+        seqlens_in_batch = attention_mask.sum(dim=-1, dtype=torch.int32)
+        indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
+        max_seqlen_in_batch = int(seqlens_in_batch.max().item()) if seqlens_in_batch.numel() else 0
+        cu_seqlens = torch.nn.functional.pad(
+            torch.cumsum(seqlens_in_batch, dim=0, dtype=torch.int32),
+            (1, 0),
+        )
+        return hidden_states.reshape(-1, hidden_states.shape[-1])[indices], indices, cu_seqlens, max_seqlen_in_batch
+
+    def _pad_input(hidden_states, indices, batch_size, seqlen):
+        import torch
+
+        output = torch.zeros(
+            batch_size * seqlen,
+            *hidden_states.shape[1:],
+            dtype=hidden_states.dtype,
+            device=hidden_states.device,
+        )
+        output[indices] = hidden_states
+        return output.reshape(batch_size, seqlen, *hidden_states.shape[1:])
+
+    flash_attn_mod = types.ModuleType("flash_attn")
+    flash_attn_interface_mod = types.ModuleType("flash_attn.flash_attn_interface")
+    bert_padding_mod = types.ModuleType("flash_attn.bert_padding")
+
+    flash_attn_mod.__spec__ = importlib.machinery.ModuleSpec("flash_attn", loader=None, is_package=True)
+    flash_attn_mod.__path__ = []
+    flash_attn_interface_mod.__spec__ = importlib.machinery.ModuleSpec(
+        "flash_attn.flash_attn_interface", loader=None
+    )
+    bert_padding_mod.__spec__ = importlib.machinery.ModuleSpec("flash_attn.bert_padding", loader=None)
 
     flash_attn_mod.flash_attn_func = _not_available
     flash_attn_mod.flash_attn_varlen_func = _not_available
+
     flash_attn_interface_mod.flash_attn_func = _not_available
     flash_attn_interface_mod.flash_attn_varlen_func = _not_available
 
+    bert_padding_mod.index_first_axis = _index_first_axis
+    bert_padding_mod.pad_input = _pad_input
+    bert_padding_mod.unpad_input = _unpad_input
+
     sys.modules["flash_attn"] = flash_attn_mod
     sys.modules["flash_attn.flash_attn_interface"] = flash_attn_interface_mod
+    sys.modules["flash_attn.bert_padding"] = bert_padding_mod
 
 
 _install_flash_attn_import_stub()
