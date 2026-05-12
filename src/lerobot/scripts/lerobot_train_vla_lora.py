@@ -30,12 +30,6 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from accelerate import Accelerator
 
-warnings.filterwarnings(
-    "ignore",
-    message=r".*AttentionMaskConverter.*",
-    category=FutureWarning,
-)
-
 # ---------------------------------------------------------------------
 # Very early noise/dependency guards.
 # Must run before importing LeRobot, diffusers, transformers, etc.
@@ -130,6 +124,7 @@ _install_flash_attn_import_stub()
 warnings.filterwarnings("ignore", message=r".*torchcodec.*")
 warnings.filterwarnings("ignore", message=r".*falling back to 'pyav'.*")
 warnings.filterwarnings("ignore", message=r".*GenerationMixin.*")
+warnings.filterwarnings("ignore", message=r".*AttentionMaskConverter.*", category=FutureWarning)
 warnings.filterwarnings("ignore", message=r".*doesn't directly inherit from `GenerationMixin`.*")
 
 
@@ -226,20 +221,30 @@ def _setup_quiet_logging(accelerator=None) -> None:
 # ---------------------------------------------------------------------
 
 def _force_pyav_video_decoder() -> None:
-    """Force dataset video decoding to use memory-safe PyAV seeking."""
+    """Force LeRobot dataset decoding to use memory-safe PyAV seeking.
+
+    This patches the exact modules used by dataset_reader._decode_single.
+    It is deliberately done before make_dataset()/DataLoader creation.
+
+    Important:
+    For the first validation run, use --num_workers=0 so the patch runs in the
+    same process as data loading. Multi-worker DataLoader may import modules in
+    child processes before the monkey patch is visible.
+    """
+    import importlib
+
     try:
         import av
         import numpy as np
     except Exception as exc:
         raise ImportError("PyAV is required. Install with: uv pip install av") from exc
 
-    try:
-        from lerobot.datasets import video_utils
-        from lerobot.datasets import dataset_reader
-    except Exception:
-        return
+    video_utils = importlib.import_module("lerobot.datasets.video_utils")
+    dataset_reader = importlib.import_module("lerobot.datasets.dataset_reader")
 
     def _as_float_list(timestamps):
+        if timestamps is None:
+            return []
         if hasattr(timestamps, "detach"):
             timestamps = timestamps.detach().cpu().flatten().tolist()
         elif hasattr(timestamps, "flatten"):
@@ -250,7 +255,10 @@ def _force_pyav_video_decoder() -> None:
             timestamps = [timestamps]
         return [float(t) for t in timestamps]
 
-    def _decode_video_frames_pyav(video_path, timestamps, tolerance_s=None, backend=None, **kwargs):
+    def _decode_video_frames_pyav(video_path, timestamps=None, tolerance_s=None, backend=None, **kwargs):
+        if timestamps is None:
+            timestamps = kwargs.get("timestamps", None)
+
         query_ts = _as_float_list(timestamps)
         if not query_ts:
             return torch.empty((0, 3, 0, 0), dtype=torch.uint8)
@@ -262,14 +270,16 @@ def _force_pyav_video_decoder() -> None:
             container = av.open(path)
             stream = container.streams.video[0]
 
-            # timestamp 기준 seek. PyAV seek offset은 time_base 단위.
             time_base = float(stream.time_base) if stream.time_base is not None else 1.0 / 30.0
             seek_pts = max(int(ts / time_base), 0)
 
             try:
                 container.seek(seek_pts, any_frame=False, backward=True, stream=stream)
             except Exception:
-                container.seek(0)
+                try:
+                    container.seek(0)
+                except Exception:
+                    pass
 
             best_frame = None
             best_dt = float("inf")
@@ -287,7 +297,6 @@ def _force_pyav_video_decoder() -> None:
                     best_dt = dt
                     best_frame = frame
 
-                # timestamp를 지나쳤고 충분히 가까운 프레임을 찾았으면 종료
                 if frame_t >= ts and best_frame is not None:
                     break
 
@@ -301,8 +310,29 @@ def _force_pyav_video_decoder() -> None:
         array = np.stack(frames, axis=0)  # [T,H,W,C]
         return torch.from_numpy(array).permute(0, 3, 1, 2).contiguous()
 
+    # Patch every public decode entry that may call torchvision.io.VideoReader.
     video_utils.decode_video_frames = _decode_video_frames_pyav
+    if hasattr(video_utils, "decode_video_frames_torchvision"):
+        video_utils.decode_video_frames_torchvision = _decode_video_frames_pyav
+    if hasattr(video_utils, "decode_video_frames_pyav"):
+        video_utils.decode_video_frames_pyav = _decode_video_frames_pyav
+
+    # dataset_reader imports decode_video_frames as a module-level symbol.
     dataset_reader.decode_video_frames = _decode_video_frames_pyav
+
+    # Also patch function globals defensively, in case the symbol was captured.
+    for obj in list(vars(dataset_reader).values()):
+        fn = getattr(obj, "__func__", obj)
+        if hasattr(fn, "__globals__") and "decode_video_frames" in fn.__globals__:
+            fn.__globals__["decode_video_frames"] = _decode_video_frames_pyav
+
+        if isinstance(obj, type):
+            for member in vars(obj).values():
+                member_fn = getattr(member, "__func__", member)
+                if hasattr(member_fn, "__globals__") and "decode_video_frames" in member_fn.__globals__:
+                    member_fn.__globals__["decode_video_frames"] = _decode_video_frames_pyav
+
+    logging.info("video decoder: forced PyAV seek decoder")
 
 
 # ---------------------------------------------------------------------
@@ -623,7 +653,7 @@ def train_vla_lora(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" =
 
     cfg.validate()
 
-    # _force_pyav_video_decoder()
+    _force_pyav_video_decoder()
 
     policy_type = str(cfg.policy.type).lower()
     if policy_type not in SUPPORTED_LORA_POLICIES:
