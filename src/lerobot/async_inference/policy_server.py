@@ -565,6 +565,7 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             raw_observation,
             self.lerobot_features,
             slot.policy.config.image_features,
+            camera_key_map=getattr(slot.policy.config, "camera_key_map", None),
         )
         prepare_time = time.perf_counter() - start_prepare
 

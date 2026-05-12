@@ -59,6 +59,14 @@ class PreTrainedConfig(draccus.ChoiceRegistry, HubMixin, abc.ABC):  # type: igno
     input_features: dict[str, PolicyFeature] | None = field(default_factory=dict)
     output_features: dict[str, PolicyFeature] | None = field(default_factory=dict)
 
+    # Camera keys used when this policy was trained.
+    # These are derived from dataset.meta.camera_keys / dataset features.
+    dataset_camera_keys: list[str] | None = None
+
+    # Optional explicit runtime remap.
+    # Format: {"observation.images.robot_key": "observation.images.trained_key"}
+    camera_key_map: dict[str, str] = field(default_factory=dict)
+
     device: str | None = None  # e.g. "cuda", "cuda:0", "cpu", or "mps"
     # `use_amp` determines whether to use Automatic Mixed Precision (AMP) for training and evaluation. With AMP,
     # automatic gradient scaling is used.

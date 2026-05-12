@@ -28,6 +28,8 @@ from lerobot.processor import PolicyProcessorPipeline
 
 from .base import InferenceEngine
 
+from lerobot.policies.camera_key_utils import remap_observation_camera_keys
+
 logger = logging.getLogger(__name__)
 
 
@@ -108,6 +110,12 @@ class SyncInferenceEngine(InferenceEngine):
             else nullcontext()
         )
         with torch.inference_mode(), autocast_ctx:
+            observation = remap_observation_camera_keys(
+                observation,
+                self._policy.config.image_features,
+                camera_key_map=getattr(self._policy.config, "camera_key_map", None),
+                strict=True,
+            )
             observation = prepare_observation_for_inference(
                 observation, self._device, self._task, self._robot_type
             )

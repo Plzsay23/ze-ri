@@ -144,6 +144,7 @@ def make_groot_pre_post_processors(
             embodiment_tag=config.embodiment_tag,
             normalize_min_max=True,
             stats=padded_stats,
+            image_keys=list(config.image_features.keys()),
         ),
         # 4. Eagle encode (creates eagle_content)
         GrootEagleEncodeStep(
@@ -221,6 +222,7 @@ class GrootPackInputsStep(ProcessorStep):
     language_key: str = "task"
     formalize_language: bool = False
     embodiment_tag: str = "new_embodiment"
+    image_keys: list[str] | None = None
     embodiment_mapping: dict[str, int] = field(
         default_factory=lambda: {
             "new_embodiment": 31,  # Match original GR00T EMBODIMENT_TAG_MAPPING
@@ -271,9 +273,12 @@ class GrootPackInputsStep(ProcessorStep):
             return torch.where(mask, mapped, torch.zeros_like(mapped))
 
         # 1) Video (B, T=1, V, H, W, C) uint8
-        img_keys = sorted([k for k in obs if k.startswith(OBS_IMAGES)])
-        if not img_keys and OBS_IMAGE in obs:
-            img_keys = [OBS_IMAGE]
+        if self.image_keys is not None:
+            img_keys = [k for k in self.image_keys if k in obs]
+        else:
+            img_keys = sorted([k for k in obs if k.startswith(OBS_IMAGES)])
+            if not img_keys and OBS_IMAGE in obs:
+                img_keys = [OBS_IMAGE]
         if img_keys:
             cams = [_to_uint8_np_bhwc(obs[k]) for k in img_keys]
             video = np.stack(cams, axis=1)  # (B, V, H, W, C)
@@ -394,6 +399,7 @@ class GrootPackInputsStep(ProcessorStep):
             "embodiment_tag": self.embodiment_tag,
             "embodiment_mapping": self.embodiment_mapping,
             "normalize_min_max": self.normalize_min_max,
+            "image_keys": self.image_keys,
         }
 
     def state_dict(self) -> dict[str, torch.Tensor]:

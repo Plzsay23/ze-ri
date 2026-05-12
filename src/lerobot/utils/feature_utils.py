@@ -120,7 +120,19 @@ def build_dataset_frame(
         elif ft["dtype"] == "float32" and len(ft["shape"]) == 1:
             frame[key] = np.array([values[name] for name in ft["names"]], dtype=np.float32)
         elif ft["dtype"] in ["image", "video"]:
-            frame[key] = values[key.removeprefix(f"{prefix}.images.")]
+            raw_key = key.removeprefix(f"{prefix}.images.")
+
+            if raw_key in values:
+                frame[key] = values[raw_key]
+            elif key in values:
+                frame[key] = values[key]
+            else:
+                available = sorted(values.keys())
+                raise KeyError(
+                    f"Missing image value for dataset feature {key!r}. "
+                    f"Tried raw key {raw_key!r} and full key {key!r}. "
+                    f"Available keys: {available}"
+                )
 
     return frame
 

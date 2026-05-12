@@ -464,11 +464,12 @@ class RobotClient:
         self.server_address = config.server_address
 
         self.policy_config = RemotePolicyConfig(
-            config.policy_type,
-            config.pretrained_name_or_path,
-            lerobot_features,
-            config.actions_per_chunk,
-            config.policy_device,
+            policy_type=config.policy_type,
+            pretrained_name_or_path=config.pretrained_name_or_path,
+            lerobot_features=lerobot_features,
+            actions_per_chunk=config.actions_per_chunk,
+            device=config.policy_device,
+            rename_map=getattr(config, "rename_map", {}) or {},
         )
 
         self.channel = grpc.insecure_channel(

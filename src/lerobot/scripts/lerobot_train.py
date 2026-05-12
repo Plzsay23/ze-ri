@@ -60,6 +60,8 @@ from lerobot.utils.utils import (
 
 from .lerobot_eval import eval_policy_all
 
+from lerobot.policies.camera_key_utils import convert_uint8_images_to_float, get_dataset_camera_keys
+
 
 def update_policy(
     train_metrics: MetricsTracker,
@@ -253,6 +255,11 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
         rename_map=cfg.rename_map,
     )
 
+    dataset_camera_keys = get_dataset_camera_keys(dataset.meta)
+    if is_main_process:
+        logging.info("Dataset camera keys: %s", dataset_camera_keys)
+        logging.info("Policy image features after sync: %s", list(policy.config.image_features.keys()))
+
     if cfg.peft is not None:
         logging.info("Using PEFT! Wrapping model.")
         # Convert CLI peft config to dict for overrides
@@ -434,9 +441,7 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
     for _ in range(step, cfg.steps):
         start_time = time.perf_counter()
         batch = next(dl_iter)
-        for cam_key in dataset.meta.camera_keys:
-            if cam_key in batch and batch[cam_key].dtype == torch.uint8:
-                batch[cam_key] = batch[cam_key].to(dtype=torch.float32) / 255.0
+        batch = convert_uint8_images_to_float(batch, dataset_camera_keys)
         batch = preprocessor(batch)
         train_tracker.dataloading_s = time.perf_counter() - start_time
 

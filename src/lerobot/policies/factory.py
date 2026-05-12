@@ -60,6 +60,7 @@ from .utils import validate_visual_features_consistency
 from .vqbet.configuration_vqbet import VQBeTConfig
 from .wall_x.configuration_wall_x import WallXConfig
 from .xvla.configuration_xvla import XVLAConfig
+from .camera_key_utils import sync_policy_camera_keys_from_dataset
 
 
 def _reconnect_relative_absolute_steps(
@@ -505,8 +506,27 @@ def make_policy(
         features = env_to_policy_features(env_cfg)
 
     cfg.output_features = {key: ft for key, ft in features.items() if ft.type is FeatureType.ACTION}
+
+    dataset_input_features = {key: ft for key, ft in features.items() if key not in cfg.output_features}
+
     if not cfg.input_features:
-        cfg.input_features = {key: ft for key, ft in features.items() if key not in cfg.output_features}
+        cfg.input_features = dataset_input_features
+    else:
+        # Keep user/pretrained non-visual features, but visual features must follow the dataset.
+        # This fixes policies that were pretrained with hard-coded camera keys.
+        dataset_visual_features = {
+            key: ft for key, ft in dataset_input_features.items() if ft.type is FeatureType.VISUAL
+        }
+        if dataset_visual_features:
+            cfg.input_features = {
+                key: ft for key, ft in cfg.input_features.items() if ft.type is not FeatureType.VISUAL
+            }
+            cfg.input_features.update(dataset_visual_features)
+
+        # If dataset provides state but pretrained config omitted it, add it.
+        for key, ft in dataset_input_features.items():
+            if ft.type is FeatureType.STATE and key not in cfg.input_features:
+                cfg.input_features[key] = ft
 
     # Store action feature names for relative_exclude_joints support
     if ds_meta is not None and hasattr(cfg, "action_feature_names"):

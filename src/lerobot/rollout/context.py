@@ -57,6 +57,8 @@ from .inference import (
 )
 from .robot_wrapper import ThreadSafeRobot
 
+from lerobot.policies.camera_key_utils import infer_camera_key_map
+
 logger = logging.getLogger(__name__)
 
 
@@ -313,20 +315,39 @@ def build_rollout_context(
     )
 
     # Validate visual features if no rename_map is active
-    rename_map = cfg.rename_map
-    if not rename_map:
-        expected_visuals = {k for k, v in full_config.input_features.items() if v.type == FeatureType.VISUAL}
-        provided_visuals = {
-            f"observation.images.{k}" for k, v in robot.observation_features.items() if isinstance(v, tuple)
-        }
-        policy_subset = expected_visuals.issubset(provided_visuals)
-        hw_subset = provided_visuals.issubset(expected_visuals)
-        if not (policy_subset or hw_subset):
-            raise ValueError(
-                f"Visual feature mismatch between policy and robot hardware.\n"
-                f"Policy expects: {expected_visuals}\n"
-                f"Robot provides: {provided_visuals}"
-            )
+    rename_map = cfg.rename_map or {}
+
+    expected_visuals = [
+        k for k, v in full_config.input_features.items() if v.type == FeatureType.VISUAL
+    ]
+    provided_visuals = [
+        f"observation.images.{k}"
+        for k, v in robot.observation_features.items()
+        if isinstance(v, tuple)
+    ]
+
+    camera_key_map = infer_camera_key_map(
+        expected_keys=expected_visuals,
+        provided_keys=provided_visuals,
+        explicit_map=rename_map,
+        allow_single_camera_fallback=True,
+    )
+
+    missing_visuals = [k for k in expected_visuals if k not in set(camera_key_map.values())]
+
+    if missing_visuals:
+        raise ValueError(
+            f"Visual feature mismatch between trained policy and robot hardware.\n"
+            f"Policy expects: {expected_visuals}\n"
+            f"Robot provides: {provided_visuals}\n"
+            f"Inferred camera_key_map: {camera_key_map}\n"
+            f"Missing policy visual keys: {missing_visuals}\n"
+            "Rename robot camera names to match the training dataset, or pass cfg.rename_map."
+        )
+
+    # Store inferred map into policy config for sync/rtc inference.
+    full_config.camera_key_map = camera_key_map
+    policy.config.camera_key_map = camera_key_map
 
     # --- 5. Dataset -------------
     dataset = None

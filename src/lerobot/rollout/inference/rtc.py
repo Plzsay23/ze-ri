@@ -45,6 +45,8 @@ from lerobot.utils.feature_utils import build_dataset_frame
 from ..robot_wrapper import ThreadSafeRobot
 from .base import InferenceEngine
 
+from lerobot.policies.camera_key_utils import remap_observation_camera_keys
+
 logger = logging.getLogger(__name__)
 
 # How long the RTC loop sleeps when paused, idle, or backpressured by a full queue.
@@ -277,6 +279,12 @@ class RTCInferenceEngine(InferenceEngine):
                         delay = math.ceil(latency / time_per_chunk) if latency else 0
 
                         obs_batch = build_dataset_frame(self._hw_features, obs, prefix="observation")
+                        obs_batch = remap_observation_camera_keys(
+                            obs_batch,
+                            self._policy.config.image_features,
+                            camera_key_map=getattr(self._policy.config, "camera_key_map", None),
+                            strict=True,
+                        )
                         obs_batch = prepare_observation_for_inference(
                             obs_batch, policy_device, self._task, self._robot.robot_type
                         )
