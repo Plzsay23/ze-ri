@@ -53,7 +53,9 @@ python -m lerobot.scripts.lerobot_train_vla_lora \
 
 import dataclasses
 import logging
+import os
 import time
+import warnings
 from pathlib import Path
 from pprint import pformat
 from typing import TYPE_CHECKING, Any
@@ -62,6 +64,66 @@ if TYPE_CHECKING:
     from accelerate import Accelerator
 
 import torch
+
+import sys
+import types
+
+
+def _peek_policy_type_from_argv() -> str | None:
+    """Read --policy.type from CLI without importing LeRobot.
+
+    This is intentionally tiny and only used to avoid optional dependency imports
+    for unrelated policy families.
+    """
+    argv = sys.argv[1:]
+    for i, arg in enumerate(argv):
+        if arg.startswith("--policy.type="):
+            return arg.split("=", 1)[1].strip().lower()
+        if arg == "--policy.type" and i + 1 < len(argv):
+            return argv[i + 1].strip().lower()
+    return None
+
+
+def _install_flash_attn_stub_for_non_xvla() -> None:
+    """Avoid failing GR00T runs because XVLA optional flash-attn imports eagerly.
+
+    Current LeRobot policy imports may load XVLA modules while parsing/constructing
+    unrelated policies. When policy.type is not xvla, flash-attn is not used, so this
+    lightweight stub prevents import-time CUDA runtime errors such as:
+        ImportError: libcudart.so.12: cannot open shared object file
+
+    If policy.type=xvla, do NOT install the stub. XVLA should use the real dependency
+    or fail honestly if the environment is not ready.
+    """
+    policy_type = _peek_policy_type_from_argv()
+    if policy_type == "xvla":
+        return
+
+    # If flash_attn is already successfully imported, do nothing.
+    if "flash_attn" in sys.modules:
+        return
+
+    flash_attn_mod = types.ModuleType("flash_attn")
+    flash_attn_interface_mod = types.ModuleType("flash_attn.flash_attn_interface")
+
+    def _not_available(*args, **kwargs):
+        raise ImportError(
+            "flash_attn is not available in this environment. "
+            "This stub exists only to prevent unrelated non-XVLA runs from failing "
+            "during eager optional imports."
+        )
+
+    flash_attn_mod.flash_attn_func = _not_available
+    flash_attn_mod.flash_attn_varlen_func = _not_available
+    flash_attn_interface_mod.flash_attn_func = _not_available
+    flash_attn_interface_mod.flash_attn_varlen_func = _not_available
+
+    sys.modules["flash_attn"] = flash_attn_mod
+    sys.modules["flash_attn.flash_attn_interface"] = flash_attn_interface_mod
+
+
+_install_flash_attn_stub_for_non_xvla()
+
 from huggingface_hub import HfApi
 from termcolor import colored
 from tqdm import tqdm
@@ -94,6 +156,119 @@ VLA_LORA_CATEGORY = {
 }
 
 SUPPORTED_LORA_POLICIES = set(VLA_LORA_CATEGORY.keys())
+
+QUIET_LORA_LOGS = True
+
+
+def _setup_quiet_logs() -> None:
+    """Keep console output minimal: summary, progress, finish, real errors."""
+    if not QUIET_LORA_LOGS:
+        return
+
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+    os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+
+    warnings.filterwarnings("ignore", message=r".*torchcodec.*")
+    warnings.filterwarnings("ignore", message=r".*falling back to 'pyav'.*")
+    warnings.filterwarnings("ignore", message=r".*GenerationMixin.*")
+    warnings.filterwarnings("ignore", message=r".*doesn't directly inherit from `GenerationMixin`.*")
+
+    for name in [
+        "huggingface_hub",
+        "transformers",
+        "transformers.generation",
+        "lerobot.utils.import_utils",
+        "lerobot.datasets.video_utils",
+        "lerobot.datasets.dataset_reader",
+        "lerobot.datasets.lerobot_dataset",
+        "lerobot.datasets",
+        "lerobot.optim.schedulers",
+        "lerobot.optim",
+        "torch",
+        "torchvision",
+        "accelerate",
+        "peft",
+    ]:
+        logging.getLogger(name).setLevel(logging.ERROR)
+
+
+def _force_pyav_video_decoder() -> None:
+    """Force LeRobot dataset decoding away from torchvision.io.VideoReader.
+
+    Some Jetson/torchvision builds do not expose torchvision.io.VideoReader.
+    The observed traceback is:
+      decode_video_frames -> decode_video_frames_torchvision -> torchvision.io.VideoReader
+
+    This monkey-patches both:
+      - lerobot.datasets.video_utils.decode_video_frames
+      - lerobot.datasets.dataset_reader.decode_video_frames
+
+    Output format:
+      torch.uint8 Tensor [T, C, H, W]
+    """
+    try:
+        import av
+        import numpy as np
+        import torch
+    except Exception as exc:
+        raise ImportError("PyAV fallback decoder is required. Install it with: uv pip install av") from exc
+
+    try:
+        from lerobot.datasets import video_utils
+        from lerobot.datasets import dataset_reader
+    except Exception:
+        return
+
+    def _as_float_list(timestamps):
+        if hasattr(timestamps, "detach"):
+            timestamps = timestamps.detach().cpu().flatten().tolist()
+        elif hasattr(timestamps, "flatten"):
+            timestamps = list(timestamps.flatten())
+        elif not isinstance(timestamps, (list, tuple)):
+            timestamps = [timestamps]
+        return [float(t) for t in timestamps]
+
+    def _decode_with_pyav(video_path, timestamps, tolerance_s=None, backend=None):
+        query_ts = _as_float_list(timestamps)
+        if not query_ts:
+            return torch.empty((0, 3, 0, 0), dtype=torch.uint8)
+
+        path = str(video_path)
+        container = av.open(path)
+        stream = container.streams.video[0]
+        time_base = float(stream.time_base) if stream.time_base is not None else None
+        avg_rate = float(stream.average_rate) if stream.average_rate is not None else None
+
+        decoded = []
+        for idx, frame in enumerate(container.decode(stream)):
+            if frame.pts is not None and time_base is not None:
+                t = float(frame.pts * time_base)
+            elif avg_rate and avg_rate > 0:
+                t = float(idx / avg_rate)
+            else:
+                t = float(idx)
+
+            arr = frame.to_rgb().to_ndarray()
+            decoded.append((t, arr))
+
+        container.close()
+
+        if not decoded:
+            raise RuntimeError(f"No frames decoded from video: {path}")
+
+        times = np.asarray([x[0] for x in decoded], dtype=np.float64)
+        frames = []
+        for ts in query_ts:
+            nearest_idx = int(np.argmin(np.abs(times - ts)))
+            frames.append(decoded[nearest_idx][1])
+
+        arr = np.stack(frames, axis=0)  # [T,H,W,C]
+        return torch.from_numpy(arr).permute(0, 3, 1, 2).contiguous()
+
+    video_utils.decode_video_frames = _decode_with_pyav
+    dataset_reader.decode_video_frames = _decode_with_pyav
+
 
 
 # GR00T target:
@@ -139,17 +314,11 @@ def _normalize_target_modules(value: Any) -> list[str] | None:
 
 
 def _log_lora_targets(policy_type: str, targets: list[str]) -> None:
-    logging.info("=" * 80)
-    logging.info("[%s] LoRA category: %s", policy_type, VLA_LORA_CATEGORY[policy_type]["description"])
-    logging.info("[%s] discovered %d LoRA target modules.", policy_type, len(targets))
-
-    for target in targets[:40]:
-        logging.info("  LoRA target: %s", target)
-
-    if len(targets) > 40:
-        logging.info("  ... and %d more", len(targets) - 40)
-
-    logging.info("=" * 80)
+    logging.info(
+        "LoRA target: %s | modules=%d",
+        VLA_LORA_CATEGORY[policy_type]["description"],
+        len(targets),
+    )
 
 
 def _discover_groot_action_lora_targets(policy: torch.nn.Module) -> list[str]:
@@ -288,10 +457,13 @@ def _build_vla_lora_config(
         if value is not None:
             config_kwargs[key] = value
 
-    logging.info("=" * 80)
-    logging.info("[%s] Final LoRA config", policy_type)
-    logging.info(pformat(config_kwargs))
-    logging.info("=" * 80)
+    logging.info(
+        "LoRA config: r=%s | alpha=%s | dropout=%s | targets=%d",
+        config_kwargs["r"],
+        config_kwargs["lora_alpha"],
+        config_kwargs["lora_dropout"],
+        len(target_modules),
+    )
 
     return LoraConfig(**config_kwargs), target_modules
 
@@ -461,34 +633,24 @@ def _make_dataloader(cfg: TrainPipelineConfig, dataset, device: torch.device):
 
 
 def _log_trainable_parameters(policy: torch.nn.Module) -> None:
-    trainable = []
-    frozen_count = 0
     trainable_count = 0
     total_count = 0
+    trainable_tensors = 0
 
-    for name, param in policy.named_parameters():
+    for _, param in policy.named_parameters():
         n = param.numel()
         total_count += n
         if param.requires_grad:
             trainable_count += n
-            trainable.append((name, n))
-        else:
-            frozen_count += n
+            trainable_tensors += 1
 
-    logging.info("=" * 80)
-    logging.info("Trainable parameter summary")
-    logging.info("  trainable params: %d", trainable_count)
-    logging.info("  frozen params:    %d", frozen_count)
-    logging.info("  total params:     %d", total_count)
-    logging.info("  trainable ratio:  %.6f", trainable_count / max(total_count, 1))
-
-    for name, n in trainable[:80]:
-        logging.info("  trainable: %s (%d)", name, n)
-
-    if len(trainable) > 80:
-        logging.info("  ... and %d more trainable tensors", len(trainable) - 80)
-
-    logging.info("=" * 80)
+    logging.info(
+        "params: trainable=%s | total=%s | ratio=%.6f | tensors=%d",
+        format_big_number(trainable_count),
+        format_big_number(total_count),
+        trainable_count / max(total_count, 1),
+        trainable_tensors,
+    )
 
 
 @parser.wrap()
@@ -497,6 +659,9 @@ def train_vla_lora(
     accelerator: "Accelerator | None" = None,
 ):
     """Train only VLA action-side LoRA adapter."""
+    _setup_quiet_logs()
+    _force_pyav_video_decoder()
+
     require_package("accelerate", extra="training")
     require_package("peft", extra="training")
 
@@ -541,9 +706,26 @@ def train_vla_lora(
 
     if is_main_process:
         logging.info("=" * 80)
-        logging.info("%s LoRA TRAINING MODE", policy_type.upper())
-        logging.info("VLA category: %s", VLA_LORA_CATEGORY[policy_type]["description"])
-        logging.info(pformat(cfg.to_dict()))
+        logging.info("%s LoRA TRAINING", policy_type.upper())
+        logging.info(
+            "dataset=%s | base=%s | repo=%s",
+            cfg.dataset.repo_id,
+            cfg.policy.pretrained_path,
+            cfg.policy.repo_id,
+        )
+        logging.info(
+            "steps=%s | batch_size=%s | workers=%s | device=%s | dtype=%s",
+            cfg.steps,
+            cfg.batch_size,
+            cfg.num_workers,
+            cfg.policy.device,
+            getattr(cfg.policy, "dtype", None),
+        )
+        logging.info(
+            "peft=lora | r=%s | output_dir=%s",
+            getattr(cfg.peft, "r", None) if cfg.peft is not None else None,
+            cfg.output_dir,
+        )
         logging.info("=" * 80)
 
     if cfg.seed is not None:
@@ -560,7 +742,7 @@ def train_vla_lora(
 
     # Dataset
     if is_main_process:
-        logging.info("Creating dataset")
+        logging.info("Preparing dataset")
         dataset = make_dataset(cfg)
 
     accelerator.wait_for_everyone()
@@ -572,17 +754,13 @@ def train_vla_lora(
 
     # Base VLA policy
     if is_main_process:
-        logging.info("Creating base %s policy", policy_type)
+        logging.info("Loading base policy")
 
     policy = make_policy(
         cfg=cfg.policy,
         ds_meta=dataset.meta,
         rename_map=cfg.rename_map,
     )
-
-    if is_main_process:
-        logging.info("Dataset camera keys: %s", dataset_camera_keys)
-        logging.info("Policy image features: %s", list(policy.config.image_features.keys()))
 
     # LoRA config + wrapping
     peft_overrides = dataclasses.asdict(cfg.peft) if cfg.peft is not None else {}
@@ -610,7 +788,7 @@ def train_vla_lora(
 
     # Optimizer / scheduler / dataloader
     if is_main_process:
-        logging.info("Creating optimizer and scheduler")
+        logging.info("Preparing optimizer")
 
     optimizer, lr_scheduler = make_optimizer_and_scheduler(cfg, policy)
 
@@ -631,13 +809,14 @@ def train_vla_lora(
     num_total_params = sum(p.numel() for p in policy.parameters())
 
     if is_main_process:
-        logging.info(colored("Output dir:", "yellow", attrs=["bold"]) + f" {cfg.output_dir}")
-        logging.info(f"{cfg.steps=} ({format_big_number(cfg.steps)})")
-        logging.info(f"{dataset.num_frames=} ({format_big_number(dataset.num_frames)})")
-        logging.info(f"{dataset.num_episodes=}")
-        logging.info(f"Effective batch size: {cfg.batch_size} x {accelerator.num_processes}")
-        logging.info(f"{num_learnable_params=} ({format_big_number(num_learnable_params)})")
-        logging.info(f"{num_total_params=} ({format_big_number(num_total_params)})")
+        logging.info(
+            "ready: frames=%s | episodes=%s | effective_batch=%s | trainable=%s/%s",
+            format_big_number(dataset.num_frames),
+            dataset.num_episodes,
+            cfg.batch_size * accelerator.num_processes,
+            format_big_number(num_learnable_params),
+            format_big_number(num_total_params),
+        )
 
     train_metrics = {
         "loss": AverageMeter("loss", ":.3f"),
@@ -661,11 +840,11 @@ def train_vla_lora(
             total=cfg.steps,
             desc=f"Training {policy_type.upper()} LoRA",
             unit="step",
-            disable=inside_slurm(),
+            disable=True,
             position=0,
-            leave=True,
+            leave=False,
         )
-        logging.info("Start %s LoRA training", policy_type.upper())
+        logging.info("Started training")
 
     # Training loop
     step = 0
@@ -698,14 +877,17 @@ def train_vla_lora(
         is_log_step = cfg.log_freq > 0 and step % cfg.log_freq == 0 and is_main_process
 
         if is_log_step:
-            logging.info(train_tracker)
-            if output_dict:
-                logging.info("Output dict: %s", output_dict)
+            logging.info(
+                "progress: step=%d/%d | %s",
+                step,
+                cfg.steps,
+                train_tracker,
+            )
             train_tracker.reset_averages()
 
     if is_main_process:
         progbar.close()
-        logging.info("End of %s LoRA training", policy_type.upper())
+        logging.info("Finished training")
 
     accelerator.wait_for_everyone()
 
