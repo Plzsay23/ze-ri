@@ -176,6 +176,14 @@ XVLA_ACTION_MLP_SUFFIXES = (
 )
 XVLA_ACTION_WITH_MLP = False
 
+# XVLA base checkpoint has model.transformer.pos_emb length 512.
+# Some real datasets produce longer sequences, e.g. 1204.
+# Do NOT instantiate XVLA with max_len_seq=2048 before loading checkpoint,
+# because strict load will fail on pos_emb shape mismatch.
+# Load with checkpoint length first, then expand pos_emb at runtime.
+XVLA_CHECKPOINT_MAX_LEN_SEQ = 512
+XVLA_RUNTIME_MIN_LEN_SEQ = 2048
+
 
 # ---------------------------------------------------------------------
 # Compact logging
@@ -494,6 +502,71 @@ def _push_adapter_to_hub(cfg: TrainPipelineConfig, local_dir: Path) -> None:
     logging.info("pushed: %s", info.repo_url.url)
 
 
+
+# ---------------------------------------------------------------------
+# XVLA pos_emb runtime expansion
+# ---------------------------------------------------------------------
+
+def _prepare_xvla_config_for_strict_load(cfg: TrainPipelineConfig, policy_type: str) -> int | None:
+    """Avoid checkpoint load mismatch for XVLA pos_emb.
+
+    If --policy.max_len_seq=2048 is passed before make_policy(), the model is
+    instantiated with pos_emb [1,2048,H], but lerobot/xvla-base checkpoint
+    contains pos_emb [1,512,H]. strict=True loading then fails.
+
+    Therefore:
+      1. construct/load with checkpoint length 512
+      2. expand pos_emb in memory after load
+    """
+    if policy_type != "xvla":
+        return None
+
+    requested = getattr(cfg.policy, "max_len_seq", XVLA_CHECKPOINT_MAX_LEN_SEQ)
+    try:
+        requested = int(requested)
+    except Exception:
+        requested = XVLA_CHECKPOINT_MAX_LEN_SEQ
+
+    target_len = max(requested, XVLA_RUNTIME_MIN_LEN_SEQ)
+
+    if hasattr(cfg.policy, "max_len_seq"):
+        cfg.policy.max_len_seq = XVLA_CHECKPOINT_MAX_LEN_SEQ
+
+    return target_len
+
+
+def _expand_xvla_pos_emb_after_load(policy: torch.nn.Module, target_len: int | None) -> None:
+    """Expand XVLA SoftPromptedTransformer.pos_emb after checkpoint load.
+
+    Extra positions are initialized by repeating the last checkpoint position.
+    Existing checkpoint positions remain unchanged.
+    """
+    if target_len is None:
+        return
+
+    transformer = None
+    if hasattr(policy, "model") and hasattr(policy.model, "transformer"):
+        transformer = policy.model.transformer
+
+    if transformer is None or not hasattr(transformer, "pos_emb"):
+        raise RuntimeError("XVLA transformer.pos_emb not found. Cannot expand max_len_seq.")
+
+    pos_emb = transformer.pos_emb
+    current_len = int(pos_emb.shape[1])
+
+    if current_len >= target_len:
+        return
+
+    with torch.no_grad():
+        old_data = pos_emb.detach()
+        extra = old_data[:, -1:, :].repeat(1, target_len - current_len, 1)
+        new_data = torch.cat([old_data, extra], dim=1).to(device=old_data.device, dtype=old_data.dtype)
+
+    transformer.pos_emb = torch.nn.Parameter(new_data, requires_grad=pos_emb.requires_grad)
+
+    logging.info("xvla pos_emb expanded: %d -> %d", current_len, target_len)
+
+
 # ---------------------------------------------------------------------
 # Main training
 # ---------------------------------------------------------------------
@@ -588,7 +661,11 @@ def train_vla_lora(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" =
 
     dataset_camera_keys = get_dataset_camera_keys(dataset.meta)
 
+    xvla_runtime_max_len_seq = _prepare_xvla_config_for_strict_load(cfg, policy_type)
+
     policy = make_policy(cfg=cfg.policy, ds_meta=dataset.meta, rename_map=cfg.rename_map)
+
+    _expand_xvla_pos_emb_after_load(policy, xvla_runtime_max_len_seq)
 
     peft_overrides = dataclasses.asdict(cfg.peft) if cfg.peft is not None else {}
     lora_config, target_modules = _build_vla_lora_config(policy_type, policy, peft_overrides)
