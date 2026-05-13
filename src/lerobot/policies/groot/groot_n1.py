@@ -82,7 +82,26 @@ class EagleBackbone(nn.Module):
             print(f"[GROOT] Warning: failed to prepare Eagle cache for backbone: {exc}")
 
         config = AutoConfig.from_pretrained(str(cache_dir), trust_remote_code=True)
-        self.eagle_model = AutoModel.from_config(config, trust_remote_code=True)
+        # Eagle25VLForConditionalGeneration does not advertise FlashAttention2 support
+        # in Transformers. If flash-attn is installed, Transformers may try to dispatch
+        # to flash_attention_2 during model construction and fail before training starts.
+        #
+        # Force a non-FA2 backend before AutoModel.from_config().
+        for attr in (
+            "attn_implementation",
+            "_attn_implementation",
+            "_attn_implementation_internal",
+        ):
+            try:
+                setattr(config, attr, "eager")
+            except Exception:
+                pass
+
+        self.eagle_model = AutoModel.from_config(
+            config,
+            trust_remote_code=True,
+            attn_implementation="eager",
+        )
 
         if project_to_dim is not None:
             self.eagle_linear = torch.nn.Linear(2048, project_to_dim)
