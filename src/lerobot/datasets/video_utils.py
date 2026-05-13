@@ -1099,3 +1099,104 @@ class VideoEncodingManager:
                 logger.debug(f"Images directory is not empty, containing {len(png_files)} PNG files")
 
         return False  # Don't suppress the original exception
+
+# ---------------------------------------------------------------------
+# Jetson / TorchVision compatibility fallback
+# ---------------------------------------------------------------------
+# Some TorchVision builds on Jetson / PyTorch 2.11 do not provide
+# torchvision.io.VideoReader. LeRobot's "pyav" backend can still route
+# through decode_video_frames_torchvision(), so we override that function
+# with a native PyAV seek decoder when VideoReader is unavailable.
+
+def _decode_video_frames_pyav_seek_fallback(
+    video_path,
+    timestamps,
+    tolerance_s=None,
+    backend=None,
+    **kwargs,
+):
+    import av
+    import numpy as np
+    import torch
+
+    def _as_float_list(ts):
+        if ts is None:
+            return []
+
+        if hasattr(ts, "detach"):
+            ts = ts.detach().cpu().flatten().tolist()
+        elif hasattr(ts, "flatten"):
+            ts = list(ts.flatten())
+        elif isinstance(ts, (list, tuple)):
+            ts = list(ts)
+        else:
+            ts = [ts]
+
+        return [float(x) for x in ts]
+
+    query_ts = _as_float_list(timestamps)
+
+    if len(query_ts) == 0:
+        return torch.empty((0, 3, 0, 0), dtype=torch.uint8)
+
+    path = str(video_path)
+    frames = []
+
+    for target_t in query_ts:
+        container = av.open(path)
+        stream = container.streams.video[0]
+
+        time_base = float(stream.time_base) if stream.time_base is not None else 1.0 / 30.0
+        seek_pts = max(int(target_t / time_base), 0)
+
+        try:
+            container.seek(seek_pts, any_frame=False, backward=True, stream=stream)
+        except Exception:
+            try:
+                container.seek(0)
+            except Exception:
+                pass
+
+        best_frame = None
+        best_dt = float("inf")
+
+        for frame in container.decode(stream):
+            if frame.pts is not None and stream.time_base is not None:
+                frame_t = float(frame.pts * stream.time_base)
+            elif stream.average_rate is not None:
+                frame_t = 0.0
+            else:
+                frame_t = 0.0
+
+            dt = abs(frame_t - target_t)
+
+            if dt < best_dt:
+                best_dt = dt
+                best_frame = frame
+
+            if frame_t >= target_t and best_frame is not None:
+                break
+
+        if best_frame is None:
+            container.close()
+            raise RuntimeError(
+                f"No frame decoded near timestamp={target_t} from video={path}"
+            )
+
+        frames.append(best_frame.to_rgb().to_ndarray())
+        container.close()
+
+    arr = np.stack(frames, axis=0)  # [T, H, W, C]
+    return torch.from_numpy(arr).permute(0, 3, 1, 2).contiguous()  # [T, C, H, W]
+
+
+try:
+    import torchvision
+
+    _has_torchvision_video_reader = hasattr(torchvision.io, "VideoReader")
+except Exception:
+    _has_torchvision_video_reader = False
+
+
+if not _has_torchvision_video_reader:
+    decode_video_frames_torchvision = _decode_video_frames_pyav_seek_fallback
