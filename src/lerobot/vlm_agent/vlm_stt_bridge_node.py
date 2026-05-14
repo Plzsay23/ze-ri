@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # zeri_vlm_stt_bridge_node.py
 
 import json
@@ -12,9 +13,10 @@ import numpy as np
 import pyrealsense2 as rs
 import rclpy
 import torch
-from PIL import Image
+from PIL import Image as PILImage
 from qwen_vl_utils import process_vision_info
 from rclpy.node import Node
+from sensor_msgs.msg import Image as RosImage
 from std_msgs.msg import String
 from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
 
@@ -167,6 +169,35 @@ def normalize_decision(parsed: Optional[Dict[str, Any]], raw_text: str) -> VLMDe
     )
 
 
+def pil_rgb_to_ros_image(
+    image: PILImage.Image,
+    stamp,
+    frame_id: str = "zeri_vlm_input_rgb",
+) -> RosImage:
+    """
+    VLM이 실제 추론에 사용한 PIL RGB 프레임을 sensor_msgs/msg/Image로 변환한다.
+    대시보드에서는 /zeri/vlm/input_rgb를 구독하면 된다.
+    """
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+
+    arr = np.asarray(image, dtype=np.uint8)
+    arr = np.ascontiguousarray(arr)
+
+    msg = RosImage()
+    msg.header.stamp = stamp
+    msg.header.frame_id = frame_id
+
+    msg.height = int(arr.shape[0])
+    msg.width = int(arr.shape[1])
+    msg.encoding = "rgb8"
+    msg.is_bigendian = False
+    msg.step = int(arr.shape[1] * 3)
+    msg.data = arr.tobytes()
+
+    return msg
+
+
 class RealSenseColorCamera:
     def __init__(self, serial: str, width: int, height: int, fps: int):
         self.serial = serial
@@ -193,13 +224,13 @@ class RealSenseColorCamera:
 
         pipeline.start(config)
 
-        # auto exposure 안정화용 warmup
+        # Auto exposure 안정화용 warmup
         for _ in range(30):
             pipeline.wait_for_frames()
 
         self.pipeline = pipeline
 
-    def capture_rgb(self) -> Image.Image:
+    def capture_rgb(self) -> PILImage.Image:
         if self.pipeline is None:
             raise RuntimeError("RealSense pipeline is not started.")
 
@@ -212,7 +243,7 @@ class RealSenseColorCamera:
         bgr = np.asanyarray(color_frame.get_data())
         rgb = bgr[:, :, ::-1]  # BGR -> RGB
 
-        return Image.fromarray(rgb)
+        return PILImage.fromarray(rgb)
 
     def stop(self) -> None:
         if self.pipeline is not None:
@@ -238,7 +269,7 @@ class QwenVLMRunner:
 
         self.processor = AutoProcessor.from_pretrained(model_id)
 
-    def infer(self, image: Image.Image, stt_text: str) -> VLMDecision:
+    def infer(self, image: PILImage.Image, stt_text: str) -> VLMDecision:
         prompt = USER_PROMPT_TEMPLATE.format(stt_text=stt_text)
 
         messages = [
@@ -307,10 +338,15 @@ class ZeriVLMSTTBridgeNode(Node):
 
         self.declare_parameter("stt_topic", "/zeri/stt/text")
         self.declare_parameter("decision_topic", "/zeri/vlm/decision")
+        self.declare_parameter("robot_speech_topic", "/zeri/vlm/robot_speech")
+        self.declare_parameter("vlm_input_rgb_topic", "/zeri/vlm/input_rgb")
+        self.declare_parameter("inference_status_topic", "/zeri/vlm/inference_status")
+
         self.declare_parameter("serial", "332322071907")
         self.declare_parameter("width", 640)
         self.declare_parameter("height", 480)
         self.declare_parameter("fps", 30)
+
         self.declare_parameter("model_id", "Qwen/Qwen3-VL-8B-Instruct")
         self.declare_parameter("dtype", "bf16")
         self.declare_parameter("max_new_tokens", 128)
@@ -319,6 +355,9 @@ class ZeriVLMSTTBridgeNode(Node):
 
         self.stt_topic = str(self.get_parameter("stt_topic").value)
         self.decision_topic = str(self.get_parameter("decision_topic").value)
+        self.robot_speech_topic = str(self.get_parameter("robot_speech_topic").value)
+        self.vlm_input_rgb_topic = str(self.get_parameter("vlm_input_rgb_topic").value)
+        self.inference_status_topic = str(self.get_parameter("inference_status_topic").value)
 
         self.confidence_threshold = float(
             self.get_parameter("confidence_threshold").value
@@ -337,9 +376,27 @@ class ZeriVLMSTTBridgeNode(Node):
         self.text_queue: queue.Queue[str] = queue.Queue(maxsize=queue_size)
         self.stop_event = threading.Event()
 
-        self.publisher = self.create_publisher(
+        self.decision_publisher = self.create_publisher(
             String,
             self.decision_topic,
+            10,
+        )
+
+        self.robot_speech_publisher = self.create_publisher(
+            String,
+            self.robot_speech_topic,
+            10,
+        )
+
+        self.vlm_input_rgb_publisher = self.create_publisher(
+            RosImage,
+            self.vlm_input_rgb_topic,
+            10,
+        )
+
+        self.inference_status_publisher = self.create_publisher(
+            String,
+            self.inference_status_topic,
             10,
         )
 
@@ -352,6 +409,11 @@ class ZeriVLMSTTBridgeNode(Node):
 
         self.get_logger().info(f"Subscribing STT topic: {self.stt_topic}")
         self.get_logger().info(f"Publishing decision topic: {self.decision_topic}")
+        self.get_logger().info(f"Publishing robot speech topic: {self.robot_speech_topic}")
+        self.get_logger().info(f"Publishing VLM input RGB topic: {self.vlm_input_rgb_topic}")
+        self.get_logger().info(f"Publishing inference status topic: {self.inference_status_topic}")
+
+        self.publish_inference_status("initializing_camera")
 
         self.get_logger().info(
             f"Starting RealSense RGB camera: serial={serial}, "
@@ -365,6 +427,8 @@ class ZeriVLMSTTBridgeNode(Node):
             fps=fps,
         )
         self.camera.start()
+
+        self.publish_inference_status("loading_vlm_model")
 
         self.get_logger().info(f"Loading VLM model: {model_id}")
 
@@ -380,7 +444,14 @@ class ZeriVLMSTTBridgeNode(Node):
         )
         self.worker.start()
 
+        self.publish_inference_status("idle")
         self.get_logger().info("Zeri VLM-STT bridge node is ready.")
+
+    def publish_inference_status(self, status: str) -> None:
+        msg = String()
+        msg.data = status
+        self.inference_status_publisher.publish(msg)
+        self.get_logger().info(f"[VLM STATUS] {status}")
 
     def stt_callback(self, msg: String) -> None:
         stt_text = msg.data.strip()
@@ -389,6 +460,7 @@ class ZeriVLMSTTBridgeNode(Node):
             return
 
         self.get_logger().info(f"Received STT text: {stt_text}")
+        self.publish_inference_status("received_stt_text")
 
         try:
             self.text_queue.put_nowait(stt_text)
@@ -406,6 +478,7 @@ class ZeriVLMSTTBridgeNode(Node):
                 self.text_queue.put_nowait(stt_text)
             except queue.Full:
                 self.get_logger().error("Failed to enqueue STT text.")
+                self.publish_inference_status("queue_full_error")
 
     def worker_loop(self) -> None:
         while not self.stop_event.is_set():
@@ -417,16 +490,32 @@ class ZeriVLMSTTBridgeNode(Node):
             start_time = time.time()
 
             try:
+                self.publish_inference_status("capturing_rgb_frame")
                 self.get_logger().info("Capturing RealSense RGB frame...")
+
                 image = self.camera.capture_rgb()
 
+                rgb_msg = pil_rgb_to_ros_image(
+                    image=image,
+                    stamp=self.get_clock().now().to_msg(),
+                    frame_id="zeri_vlm_input_rgb",
+                )
+
+                self.vlm_input_rgb_publisher.publish(rgb_msg)
+                self.get_logger().info("Published VLM input RGB frame.")
+                self.publish_inference_status("vlm_input_rgb_published")
+
+                self.publish_inference_status("running_vlm_inference")
                 self.get_logger().info("Running VLM inference...")
+
                 decision = self.vlm.infer(
                     image=image,
                     stt_text=stt_text,
                 )
 
                 elapsed = time.time() - start_time
+
+                self.publish_inference_status("vlm_inference_done")
 
                 mock_action = "idle"
 
@@ -448,14 +537,20 @@ class ZeriVLMSTTBridgeNode(Node):
                     "mock_action": mock_action,
                     "latency_sec": round(elapsed, 3),
                     "raw_vlm_output": decision.raw_text,
+                    "vlm_input_rgb_topic": self.vlm_input_rgb_topic,
                 }
 
-                out_msg = String()
-                out_msg.data = json.dumps(result, ensure_ascii=False)
+                decision_msg = String()
+                decision_msg.data = json.dumps(result, ensure_ascii=False)
 
-                self.publisher.publish(out_msg)
+                self.decision_publisher.publish(decision_msg)
 
-                self.get_logger().info(f"Published VLM decision: {out_msg.data}")
+                speech_msg = String()
+                speech_msg.data = decision.robot_speech
+                self.robot_speech_publisher.publish(speech_msg)
+
+                self.get_logger().info(f"Published VLM decision: {decision_msg.data}")
+                self.get_logger().info(f"Published robot speech: {decision.robot_speech}")
                 self.get_logger().info(f"[ROBOT SPEECH] {decision.robot_speech}")
 
                 if mock_action == "execute_oxygen_mask_delivery":
@@ -463,8 +558,12 @@ class ZeriVLMSTTBridgeNode(Node):
                 else:
                     self.log_idle_action(decision)
 
+                self.publish_inference_status("idle")
+
             except Exception as exc:
+                err = f"error: {exc}"
                 self.get_logger().error(f"VLM worker error: {exc}")
+                self.publish_inference_status(err)
 
     def log_mock_action(self, decision: VLMDecision) -> None:
         self.get_logger().info("[MOCK ACTION] Selected adapter: oxygen_mask_delivery_lora")
@@ -483,6 +582,11 @@ class ZeriVLMSTTBridgeNode(Node):
 
     def destroy_node(self) -> None:
         self.get_logger().info("Stopping worker and RealSense camera...")
+
+        try:
+            self.publish_inference_status("shutting_down")
+        except Exception:
+            pass
 
         self.stop_event.set()
 
