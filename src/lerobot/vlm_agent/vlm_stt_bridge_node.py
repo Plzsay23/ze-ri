@@ -230,6 +230,7 @@ def ros_image_to_bgr(msg: RosImage) -> Optional[np.ndarray]:
 
 def ros_image_to_pil_rgb(msg: RosImage) -> Optional[PILImage.Image]:
     bgr = ros_image_to_bgr(msg)
+
     if bgr is None:
         return None
 
@@ -257,6 +258,7 @@ def pil_rgb_to_ros_image(
     msg.is_bigendian = False
     msg.step = int(arr.shape[1] * 3)
     msg.data = arr.tobytes()
+
     return msg
 
 
@@ -358,7 +360,7 @@ class ZeriVLMSTTBridgeNode(Node):
 
         self.declare_parameter("rgb_topic", "/zeri/top/rgb/image_raw")
         self.declare_parameter("depth_topic", "/zeri/top/depth/image_raw")
-        self.declare_parameter("stt_topic", "/zeri/stt/text")
+        self.declare_parameter("stt_topic", "/stt/text")
 
         self.declare_parameter("decision_topic", "/zeri/vlm/decision")
         self.declare_parameter("robot_speech_topic", "/zeri/vlm/robot_speech")
@@ -371,6 +373,14 @@ class ZeriVLMSTTBridgeNode(Node):
         self.declare_parameter("max_new_tokens", 128)
         self.declare_parameter("confidence_threshold", 0.50)
         self.declare_parameter("queue_size", 4)
+
+        # STT gate parameters
+        self.declare_parameter("stt_gate_mode", "wake")
+        self.declare_parameter("stt_min_chars", 3)
+        self.declare_parameter("wake_listen_window_sec", 8.0)
+        self.declare_parameter("min_inference_interval_sec", 2.0)
+        self.declare_parameter("duplicate_window_sec", 5.0)
+        self.declare_parameter("wake_words", ["제리", "제리야"])
 
         self.rgb_topic = str(self.get_parameter("rgb_topic").value)
         self.depth_topic = str(self.get_parameter("depth_topic").value)
@@ -387,6 +397,38 @@ class ZeriVLMSTTBridgeNode(Node):
         max_new_tokens = int(self.get_parameter("max_new_tokens").value)
         queue_size = int(self.get_parameter("queue_size").value)
         self.confidence_threshold = float(self.get_parameter("confidence_threshold").value)
+
+        self.stt_gate_mode = str(self.get_parameter("stt_gate_mode").value)
+        self.stt_min_chars = int(self.get_parameter("stt_min_chars").value)
+        self.wake_listen_window_sec = float(self.get_parameter("wake_listen_window_sec").value)
+        self.min_inference_interval_sec = float(
+            self.get_parameter("min_inference_interval_sec").value
+        )
+        self.duplicate_window_sec = float(self.get_parameter("duplicate_window_sec").value)
+
+        wake_words_param = self.get_parameter("wake_words").value
+        self.wake_words = [
+            str(word).strip()
+            for word in wake_words_param
+            if str(word).strip()
+        ]
+
+        self.ignore_phrases = {
+            "어",
+            "음",
+            "아",
+            "네",
+            "예",
+            "응",
+            "테스트",
+            "마이크 테스트",
+            "안녕하세요",
+        }
+
+        self.last_accepted_text = ""
+        self.last_accepted_time = 0.0
+        self.last_inference_request_time = 0.0
+        self.wake_active_until = 0.0
 
         self.text_queue: queue.Queue[str] = queue.Queue(maxsize=queue_size)
         self.stop_event = threading.Event()
@@ -463,6 +505,13 @@ class ZeriVLMSTTBridgeNode(Node):
         self.get_logger().info(f"  VLM D snap:   {self.vlm_input_depth_topic}")
         self.get_logger().info(f"  Status:       {self.inference_status_topic}")
 
+        self.get_logger().info("STT gate settings:")
+        self.get_logger().info(f"  stt_gate_mode: {self.stt_gate_mode}")
+        self.get_logger().info(f"  wake_words: {self.wake_words}")
+        self.get_logger().info(f"  wake_listen_window_sec: {self.wake_listen_window_sec}")
+        self.get_logger().info(f"  min_inference_interval_sec: {self.min_inference_interval_sec}")
+        self.get_logger().info(f"  duplicate_window_sec: {self.duplicate_window_sec}")
+
         self.publish_inference_status("loading_vlm_model")
         self.get_logger().info(f"Loading VLM model: {model_id}")
 
@@ -487,6 +536,122 @@ class ZeriVLMSTTBridgeNode(Node):
         self.inference_status_publisher.publish(msg)
         self.get_logger().info(f"[VLM STATUS] {status}")
 
+    def normalize_stt_text(self, text: str) -> str:
+        text = text.strip()
+        text = " ".join(text.split())
+        return text
+
+    def contains_any_keyword(self, text: str, keywords: list[str]) -> bool:
+        return any(keyword in text for keyword in keywords)
+
+    def remove_wake_words(self, text: str) -> str:
+        cleaned = text
+
+        for wake_word in sorted(self.wake_words, key=len, reverse=True):
+            cleaned = cleaned.replace(wake_word, " ")
+
+        for ch in [",", ".", "!", "?", "~", "…", ":", ";", "，", "。"]:
+            cleaned = cleaned.replace(ch, " ")
+
+        cleaned = " ".join(cleaned.split())
+        return cleaned.strip()
+
+    def filter_stt_text_for_vlm(self, text: str) -> Optional[str]:
+        """
+        STT 텍스트를 VLM에 넘길지 결정한다.
+
+        동작:
+        - "제리 숨쉬기가 힘들어" -> "숨쉬기가 힘들어"를 VLM에 전달
+        - "제리" -> wake 상태만 켜고 VLM 추론은 하지 않음
+        - wake 상태 8초 안에 들어온 문장 -> VLM에 전달
+        - wake 없이 들어온 문장 -> 무시
+        """
+        now = time.time()
+        text = self.normalize_stt_text(text)
+
+        if not text:
+            self.publish_inference_status("ignored_empty_stt")
+            return None
+
+        if text in self.ignore_phrases:
+            self.get_logger().info(f"Ignored phrase STT text: {text}")
+            self.publish_inference_status("ignored_phrase_stt")
+            return None
+
+        has_wake_word = self.contains_any_keyword(text, self.wake_words)
+
+        if self.stt_gate_mode == "all":
+            command_text = text
+
+        elif self.stt_gate_mode == "wake":
+            if has_wake_word:
+                self.wake_active_until = now + self.wake_listen_window_sec
+                command_text = self.remove_wake_words(text)
+
+                if len(command_text) < self.stt_min_chars:
+                    self.get_logger().info(
+                        f"Wake word detected. Waiting for command for "
+                        f"{self.wake_listen_window_sec:.1f}s."
+                    )
+                    self.publish_inference_status("wake_word_detected_waiting_command")
+                    return None
+
+            else:
+                if now > self.wake_active_until:
+                    self.get_logger().info(f"Ignored STT without wake word: {text}")
+                    self.publish_inference_status("ignored_no_wake_word_stt")
+                    return None
+
+                command_text = text
+
+        else:
+            self.get_logger().warn(
+                f"Unknown stt_gate_mode={self.stt_gate_mode}. Fallback to wake mode."
+            )
+
+            if not has_wake_word and now > self.wake_active_until:
+                self.publish_inference_status("ignored_no_wake_word_stt")
+                return None
+
+            command_text = self.remove_wake_words(text) if has_wake_word else text
+
+        command_text = self.normalize_stt_text(command_text)
+
+        if len(command_text) < self.stt_min_chars:
+            self.get_logger().info(f"Ignored short command after gate: {command_text}")
+            self.publish_inference_status("ignored_short_stt")
+            return None
+
+        if command_text in self.ignore_phrases:
+            self.get_logger().info(f"Ignored phrase command after gate: {command_text}")
+            self.publish_inference_status("ignored_phrase_stt")
+            return None
+
+        is_duplicate = (
+            self.last_accepted_text == command_text
+            and now - self.last_accepted_time < self.duplicate_window_sec
+        )
+
+        if is_duplicate:
+            self.get_logger().info(f"Ignored duplicate STT command: {command_text}")
+            self.publish_inference_status("ignored_duplicate_stt")
+            return None
+
+        cooldown_active = (
+            now - self.last_inference_request_time < self.min_inference_interval_sec
+        )
+
+        if cooldown_active:
+            self.get_logger().info(f"Ignored STT due to cooldown: {command_text}")
+            self.publish_inference_status("ignored_stt_cooldown")
+            return None
+
+        self.last_accepted_text = command_text
+        self.last_accepted_time = now
+        self.last_inference_request_time = now
+
+        return command_text
+
     def rgb_callback(self, msg: RosImage) -> None:
         with self.frame_lock:
             self.latest_rgb_msg = msg
@@ -498,16 +663,25 @@ class ZeriVLMSTTBridgeNode(Node):
             self.latest_depth_time = time.time()
 
     def stt_callback(self, msg: String) -> None:
-        stt_text = msg.data.strip()
+        raw_stt_text = msg.data.strip()
 
-        if not stt_text:
+        if not raw_stt_text:
             return
 
-        self.get_logger().info(f"Received STT text: {stt_text}")
-        self.publish_inference_status("received_stt_text")
+        self.get_logger().info(f"Received raw STT text: {raw_stt_text}")
+
+        accepted_text = self.filter_stt_text_for_vlm(raw_stt_text)
+
+        if accepted_text is None:
+            return
+
+        self.get_logger().info(
+            f"Accepted STT text for VLM: raw='{raw_stt_text}', command='{accepted_text}'"
+        )
+        self.publish_inference_status("accepted_stt_text")
 
         try:
-            self.text_queue.put_nowait(stt_text)
+            self.text_queue.put_nowait(accepted_text)
         except queue.Full:
             try:
                 dropped = self.text_queue.get_nowait()
@@ -516,12 +690,14 @@ class ZeriVLMSTTBridgeNode(Node):
                 pass
 
             try:
-                self.text_queue.put_nowait(stt_text)
+                self.text_queue.put_nowait(accepted_text)
             except queue.Full:
                 self.get_logger().error("Failed to enqueue STT text.")
                 self.publish_inference_status("queue_full_error")
 
-    def get_latest_frames(self) -> Tuple[Optional[RosImage], Optional[RosImage], Optional[float], Optional[float]]:
+    def get_latest_frames(
+        self,
+    ) -> Tuple[Optional[RosImage], Optional[RosImage], Optional[float], Optional[float]]:
         with self.frame_lock:
             return (
                 self.latest_rgb_msg,
