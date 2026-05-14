@@ -88,7 +88,7 @@ class VLMDecision:
 
 def extract_json_object(text: str) -> Optional[Dict[str, Any]]:
     """
-    모델이 실수로 JSON 앞뒤에 텍스트를 붙였을 때 최대한 복구한다.
+    모델이 JSON 앞뒤에 텍스트를 붙였을 때도 최대한 복구한다.
     """
     text = text.strip()
 
@@ -176,7 +176,6 @@ def pil_rgb_to_ros_image(
 ) -> RosImage:
     """
     VLM이 실제 추론에 사용한 PIL RGB 프레임을 sensor_msgs/msg/Image로 변환한다.
-    대시보드에서는 /zeri/vlm/input_rgb를 구독하면 된다.
     """
     if image.mode != "RGB":
         image = image.convert("RGB")
@@ -198,13 +197,42 @@ def pil_rgb_to_ros_image(
     return msg
 
 
-class RealSenseColorCamera:
+def depth_np_to_ros_image(
+    depth_np: np.ndarray,
+    stamp,
+    frame_id: str = "zeri_vlm_input_depth",
+) -> RosImage:
+    """
+    RealSense aligned depth frame(uint16)을 sensor_msgs/msg/Image(16UC1)로 변환한다.
+    대시보드는 이 토픽을 받아 colormap으로 시각화한다.
+    """
+    if depth_np.dtype != np.uint16:
+        depth_np = depth_np.astype(np.uint16)
+
+    depth_np = np.ascontiguousarray(depth_np)
+
+    msg = RosImage()
+    msg.header.stamp = stamp
+    msg.header.frame_id = frame_id
+
+    msg.height = int(depth_np.shape[0])
+    msg.width = int(depth_np.shape[1])
+    msg.encoding = "16UC1"
+    msg.is_bigendian = False
+    msg.step = int(depth_np.shape[1] * 2)
+    msg.data = depth_np.tobytes()
+
+    return msg
+
+
+class RealSenseRGBDCamera:
     def __init__(self, serial: str, width: int, height: int, fps: int):
         self.serial = serial
         self.width = width
         self.height = height
         self.fps = fps
         self.pipeline: Optional[rs.pipeline] = None
+        self.align: Optional[rs.align] = None
 
     def start(self) -> None:
         pipeline = rs.pipeline()
@@ -212,8 +240,6 @@ class RealSenseColorCamera:
 
         config.enable_device(self.serial)
 
-        # depth는 사용하지 않는다. RGB color stream만 사용한다.
-        # RealSense에서 BGR로 받고 PIL 입력 전에 RGB로 변환한다.
         config.enable_stream(
             rs.stream.color,
             self.width,
@@ -222,28 +248,48 @@ class RealSenseColorCamera:
             self.fps,
         )
 
+        config.enable_stream(
+            rs.stream.depth,
+            self.width,
+            self.height,
+            rs.format.z16,
+            self.fps,
+        )
+
         pipeline.start(config)
 
-        # Auto exposure 안정화용 warmup
+        self.align = rs.align(rs.stream.color)
+
         for _ in range(30):
             pipeline.wait_for_frames()
 
         self.pipeline = pipeline
 
-    def capture_rgb(self) -> PILImage.Image:
+    def capture_rgbd(self) -> tuple[PILImage.Image, np.ndarray]:
         if self.pipeline is None:
             raise RuntimeError("RealSense pipeline is not started.")
 
+        if self.align is None:
+            raise RuntimeError("RealSense align is not initialized.")
+
         frames = self.pipeline.wait_for_frames()
-        color_frame = frames.get_color_frame()
+        aligned_frames = self.align.process(frames)
+
+        color_frame = aligned_frames.get_color_frame()
+        depth_frame = aligned_frames.get_depth_frame()
 
         if not color_frame:
             raise RuntimeError("Failed to capture RealSense color frame.")
 
-        bgr = np.asanyarray(color_frame.get_data())
-        rgb = bgr[:, :, ::-1]  # BGR -> RGB
+        if not depth_frame:
+            raise RuntimeError("Failed to capture RealSense depth frame.")
 
-        return PILImage.fromarray(rgb)
+        bgr = np.asanyarray(color_frame.get_data())
+        rgb = bgr[:, :, ::-1]
+
+        depth_np = np.asanyarray(depth_frame.get_data()).copy()
+
+        return PILImage.fromarray(rgb), depth_np
 
     def stop(self) -> None:
         if self.pipeline is not None:
@@ -340,6 +386,7 @@ class ZeriVLMSTTBridgeNode(Node):
         self.declare_parameter("decision_topic", "/zeri/vlm/decision")
         self.declare_parameter("robot_speech_topic", "/zeri/vlm/robot_speech")
         self.declare_parameter("vlm_input_rgb_topic", "/zeri/vlm/input_rgb")
+        self.declare_parameter("vlm_input_depth_topic", "/zeri/vlm/input_depth")
         self.declare_parameter("inference_status_topic", "/zeri/vlm/inference_status")
 
         self.declare_parameter("serial", "332322071907")
@@ -357,6 +404,7 @@ class ZeriVLMSTTBridgeNode(Node):
         self.decision_topic = str(self.get_parameter("decision_topic").value)
         self.robot_speech_topic = str(self.get_parameter("robot_speech_topic").value)
         self.vlm_input_rgb_topic = str(self.get_parameter("vlm_input_rgb_topic").value)
+        self.vlm_input_depth_topic = str(self.get_parameter("vlm_input_depth_topic").value)
         self.inference_status_topic = str(self.get_parameter("inference_status_topic").value)
 
         self.confidence_threshold = float(
@@ -394,6 +442,12 @@ class ZeriVLMSTTBridgeNode(Node):
             10,
         )
 
+        self.vlm_input_depth_publisher = self.create_publisher(
+            RosImage,
+            self.vlm_input_depth_topic,
+            10,
+        )
+
         self.inference_status_publisher = self.create_publisher(
             String,
             self.inference_status_topic,
@@ -411,16 +465,17 @@ class ZeriVLMSTTBridgeNode(Node):
         self.get_logger().info(f"Publishing decision topic: {self.decision_topic}")
         self.get_logger().info(f"Publishing robot speech topic: {self.robot_speech_topic}")
         self.get_logger().info(f"Publishing VLM input RGB topic: {self.vlm_input_rgb_topic}")
+        self.get_logger().info(f"Publishing VLM input Depth topic: {self.vlm_input_depth_topic}")
         self.get_logger().info(f"Publishing inference status topic: {self.inference_status_topic}")
 
         self.publish_inference_status("initializing_camera")
 
         self.get_logger().info(
-            f"Starting RealSense RGB camera: serial={serial}, "
+            f"Starting RealSense RGBD camera: serial={serial}, "
             f"resolution={width}x{height}, fps={fps}"
         )
 
-        self.camera = RealSenseColorCamera(
+        self.camera = RealSenseRGBDCamera(
             serial=serial,
             width=width,
             height=height,
@@ -465,7 +520,6 @@ class ZeriVLMSTTBridgeNode(Node):
         try:
             self.text_queue.put_nowait(stt_text)
         except queue.Full:
-            # 최신 명령을 우선하기 위해 오래된 명령 하나를 버린다.
             try:
                 dropped = self.text_queue.get_nowait()
                 self.get_logger().warn(
@@ -490,20 +544,31 @@ class ZeriVLMSTTBridgeNode(Node):
             start_time = time.time()
 
             try:
-                self.publish_inference_status("capturing_rgb_frame")
-                self.get_logger().info("Capturing RealSense RGB frame...")
+                self.publish_inference_status("capturing_rgbd_frame")
+                self.get_logger().info("Capturing RealSense RGB + Depth frame...")
 
-                image = self.camera.capture_rgb()
+                image, depth_np = self.camera.capture_rgbd()
+                stamp = self.get_clock().now().to_msg()
 
                 rgb_msg = pil_rgb_to_ros_image(
                     image=image,
-                    stamp=self.get_clock().now().to_msg(),
+                    stamp=stamp,
                     frame_id="zeri_vlm_input_rgb",
                 )
 
+                depth_msg = depth_np_to_ros_image(
+                    depth_np=depth_np,
+                    stamp=stamp,
+                    frame_id="zeri_vlm_input_depth",
+                )
+
                 self.vlm_input_rgb_publisher.publish(rgb_msg)
+                self.vlm_input_depth_publisher.publish(depth_msg)
+
                 self.get_logger().info("Published VLM input RGB frame.")
-                self.publish_inference_status("vlm_input_rgb_published")
+                self.get_logger().info("Published VLM input Depth frame.")
+
+                self.publish_inference_status("vlm_input_rgbd_published")
 
                 self.publish_inference_status("running_vlm_inference")
                 self.get_logger().info("Running VLM inference...")
@@ -538,6 +603,7 @@ class ZeriVLMSTTBridgeNode(Node):
                     "latency_sec": round(elapsed, 3),
                     "raw_vlm_output": decision.raw_text,
                     "vlm_input_rgb_topic": self.vlm_input_rgb_topic,
+                    "vlm_input_depth_topic": self.vlm_input_depth_topic,
                 }
 
                 decision_msg = String()
