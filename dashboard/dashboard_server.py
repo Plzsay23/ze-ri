@@ -99,7 +99,7 @@ INDEX_HTML = r"""
     .grid {
       display: grid;
       grid-template-columns: repeat(6, 1fr);
-      grid-template-rows: 360px 240px 240px;
+      grid-template-rows: 540px 240px 240px;
       grid-template-areas:
         "rgb  rgb  rgb  depth depth depth"
         "text text map  map   base  base"
