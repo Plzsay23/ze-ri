@@ -92,14 +92,22 @@ INDEX_HTML = r"""
       background: #22c55e;
     }
 
+    /* ===== 레이아웃 핵심 변경 부분 =====
+       6열, 3행으로 두고
+       총 세로 길이는 기존보다 약 1.5배 정도 커지게 설정
+    */
     .grid {
       display: grid;
-      grid-template-columns: 1.05fr 1.05fr 0.95fr;
-      grid-template-rows: 280px 280px;
+      grid-template-columns: repeat(6, 1fr);
+      grid-template-rows: 360px 240px 240px;
+      grid-template-areas:
+        "rgb  rgb  rgb  depth depth depth"
+        "text text map  map   base  base"
+        "text text map  map   arm   arm";
       gap: 12px;
       padding: 12px 10px 10px 10px;
       height: auto;
-      max-width: 1500px;
+      max-width: 1600px;
       margin: 0 auto;
     }
 
@@ -116,11 +124,18 @@ INDEX_HTML = r"""
       min-height: 0;
     }
 
+    .rgb-card { grid-area: rgb; }
+    .depth-card { grid-area: depth; }
+    .text-card { grid-area: text; }
+    .map-card { grid-area: map; }
+    .base-card { grid-area: base; }
+    .arm-card { grid-area: arm; }
+
     .card-title {
-      height: 32px;
-      flex: 0 0 32px;
-      padding: 6px 10px;
-      font-size: 16px;
+      height: 36px;
+      flex: 0 0 36px;
+      padding: 7px 12px;
+      font-size: 17px;
       font-weight: 900;
       background: rgba(0, 0, 0, 0.17);
       border-bottom: 1px solid rgba(255, 255, 255, 0.18);
@@ -242,7 +257,14 @@ INDEX_HTML = r"""
 
       .grid {
         grid-template-columns: 1fr;
-        grid-template-rows: repeat(6, 300px);
+        grid-template-rows: repeat(6, 320px);
+        grid-template-areas:
+          "rgb"
+          "depth"
+          "text"
+          "map"
+          "base"
+          "arm";
         height: auto;
       }
     }
@@ -260,7 +282,7 @@ INDEX_HTML = r"""
   </header>
 
   <main class="grid">
-    <section class="card">
+    <section class="card rgb-card">
       <div class="card-title">
         <span>RGB 채널</span>
         <small id="rgb-ts">대기중</small>
@@ -271,31 +293,7 @@ INDEX_HTML = r"""
       </div>
     </section>
 
-    <section class="card">
-      <div class="card-title">
-        <span>2D Map</span>
-        <small id="map-ts">대기중</small>
-      </div>
-      <div class="media-wrap">
-        <img id="map-img" alt="2D Map" style="display:none" />
-        <div id="map-placeholder" class="placeholder">Map 데이터 대기중</div>
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="card-title">
-        <span>모바일 베이스 상태</span>
-        <small id="base-ts">대기중</small>
-      </div>
-      <div class="status-big">
-        <div class="status-line">
-          <div class="label">상태 / 명령</div>
-          <div id="base-status" class="value">데이터 대기중</div>
-        </div>
-      </div>
-    </section>
-
-    <section class="card">
+    <section class="card depth-card">
       <div class="card-title">
         <span>Depth 채널</span>
         <small id="depth-ts">대기중</small>
@@ -306,7 +304,7 @@ INDEX_HTML = r"""
       </div>
     </section>
 
-    <section class="card">
+    <section class="card text-card">
       <div class="card-title">
         <span>STT / VLM 출력</span>
         <small id="vlm-ts">대기중</small>
@@ -339,7 +337,31 @@ INDEX_HTML = r"""
       </div>
     </section>
 
-    <section class="card">
+    <section class="card map-card">
+      <div class="card-title">
+        <span>2D Map</span>
+        <small id="map-ts">대기중</small>
+      </div>
+      <div class="media-wrap">
+        <img id="map-img" alt="2D Map" style="display:none" />
+        <div id="map-placeholder" class="placeholder">Map 데이터 대기중</div>
+      </div>
+    </section>
+
+    <section class="card base-card">
+      <div class="card-title">
+        <span>모바일 베이스 상태</span>
+        <small id="base-ts">대기중</small>
+      </div>
+      <div class="status-big">
+        <div class="status-line">
+          <div class="label">상태 / 명령</div>
+          <div id="base-status" class="value">데이터 대기중</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card arm-card">
       <div class="card-title">
         <span>로봇팔 상태</span>
         <small id="arm-ts">대기중</small>
@@ -529,7 +551,6 @@ def encode_image_to_data_url(
         params = [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)]
 
     ok, encoded = cv2.imencode(ext, image_bgr, params)
-
     if not ok:
         return None
 
@@ -677,7 +698,6 @@ def occupancy_grid_to_png_data_url(msg: OccupancyGrid) -> Optional[str]:
 
 def parse_json_string_or_raw(text: str) -> Dict[str, Any]:
     text = text.strip()
-
     if not text:
         return {}
 
