@@ -27,8 +27,9 @@ INDEX_HTML = r"""
 <html lang="ko">
 <head>
   <meta charset="utf-8" />
-  <title>Ze-Ri ROS2 Dashboard</title>
+  <title>Ze-Ri ROS2 VLM Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+
   <style>
     :root {
       --bg: #f3f6fb;
@@ -37,9 +38,7 @@ INDEX_HTML = r"""
       --border: #062b63;
       --text: #ffffff;
       --muted: #dbeafe;
-      --panel-bg: #0b3f91;
-      --danger: #ffdddd;
-      --ok: #d7ffe1;
+      --dark-panel: #071f49;
       --dark: #0f172a;
     }
 
@@ -52,44 +51,61 @@ INDEX_HTML = r"""
       background: var(--bg);
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       color: var(--dark);
+      overflow: hidden;
     }
 
     header {
-      height: 52px;
+      height: 46px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 18px;
+      padding: 0 14px;
       background: #0f172a;
       color: white;
-      border-bottom: 3px solid #1d4ed8;
+      border-bottom: 3px solid #2563eb;
     }
 
     header .title {
       font-size: 20px;
-      font-weight: 800;
-      letter-spacing: 0.3px;
+      font-weight: 900;
+      letter-spacing: 0.2px;
     }
 
     header .status {
       font-size: 14px;
-      font-weight: 600;
+      font-weight: 700;
       color: #bfdbfe;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #ef4444;
+      display: inline-block;
+    }
+
+    .dot.ok {
+      background: #22c55e;
     }
 
     .grid {
       display: grid;
       grid-template-columns: 1.05fr 1.05fr 0.95fr;
-      grid-template-rows: calc((100vh - 84px) / 2) calc((100vh - 84px) / 2);
+      grid-template-rows: calc((100vh - 50px) / 2) calc((100vh - 50px) / 2);
       gap: 14px;
-      padding: 14px;
+      padding: 14px 10px 10px 10px;
+      height: calc(100vh - 46px);
     }
 
     .card {
       background: linear-gradient(135deg, var(--card), var(--card2));
       border: 3px solid var(--border);
       border-radius: 8px;
-      box-shadow: 0 6px 14px rgba(15, 23, 42, 0.22);
+      box-shadow: 0 4px 10px rgba(15, 23, 42, 0.24);
       color: var(--text);
       overflow: hidden;
       display: flex;
@@ -102,9 +118,9 @@ INDEX_HTML = r"""
       height: 38px;
       flex: 0 0 38px;
       padding: 8px 12px;
-      font-size: 17px;
-      font-weight: 800;
-      background: rgba(0, 0, 0, 0.18);
+      font-size: 18px;
+      font-weight: 900;
+      background: rgba(0, 0, 0, 0.17);
       border-bottom: 1px solid rgba(255, 255, 255, 0.18);
       display: flex;
       align-items: center;
@@ -114,7 +130,12 @@ INDEX_HTML = r"""
     .card-title small {
       font-size: 11px;
       color: var(--muted);
-      font-weight: 600;
+      font-weight: 800;
+      text-align: right;
+      max-width: 55%;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
     }
 
     .media-wrap {
@@ -124,7 +145,7 @@ INDEX_HTML = r"""
       display: flex;
       align-items: center;
       justify-content: center;
-      background: #071f49;
+      background: var(--dark-panel);
     }
 
     .media-wrap img {
@@ -132,13 +153,13 @@ INDEX_HTML = r"""
       height: 100%;
       object-fit: contain;
       image-rendering: auto;
-      background: #071f49;
+      background: var(--dark-panel);
     }
 
     .placeholder {
       color: #bfdbfe;
-      font-size: 24px;
-      font-weight: 800;
+      font-size: 25px;
+      font-weight: 900;
       text-align: center;
       padding: 16px;
     }
@@ -148,36 +169,36 @@ INDEX_HTML = r"""
       min-height: 0;
       padding: 14px;
       overflow: auto;
-      background: rgba(5, 20, 48, 0.22);
+      background: rgba(5, 20, 48, 0.20);
     }
 
     .metric {
       margin-bottom: 12px;
       padding: 10px 12px;
-      background: rgba(255, 255, 255, 0.12);
-      border: 1px solid rgba(255, 255, 255, 0.16);
+      background: rgba(255, 255, 255, 0.13);
+      border: 1px solid rgba(255, 255, 255, 0.18);
       border-radius: 8px;
     }
 
     .metric-label {
       color: #dbeafe;
       font-size: 13px;
-      font-weight: 800;
-      margin-bottom: 4px;
+      font-weight: 900;
+      margin-bottom: 5px;
     }
 
     .metric-value {
       color: white;
-      font-size: 18px;
-      font-weight: 700;
+      font-size: 20px;
+      font-weight: 800;
       white-space: pre-wrap;
       word-break: break-word;
     }
 
     .metric-value.small {
       font-size: 14px;
-      line-height: 1.4;
-      font-weight: 600;
+      line-height: 1.45;
+      font-weight: 700;
     }
 
     .status-big {
@@ -188,7 +209,7 @@ INDEX_HTML = r"""
       flex-direction: column;
       justify-content: center;
       gap: 12px;
-      background: rgba(5, 20, 48, 0.18);
+      background: rgba(5, 20, 48, 0.15);
     }
 
     .status-line {
@@ -200,62 +221,38 @@ INDEX_HTML = r"""
 
     .status-line .label {
       font-size: 13px;
-      font-weight: 800;
+      font-weight: 900;
       color: #dbeafe;
-      margin-bottom: 4px;
+      margin-bottom: 6px;
     }
 
     .status-line .value {
-      font-size: 26px;
+      font-size: 28px;
       font-weight: 900;
       color: white;
       word-break: break-word;
     }
 
-    .footer {
-      height: 32px;
-      padding: 6px 14px;
-      font-size: 12px;
-      color: #334155;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .dot {
-      width: 9px;
-      height: 9px;
-      border-radius: 50%;
-      background: #ef4444;
-    }
-
-    .dot.ok {
-      background: #22c55e;
-    }
-
     @media (max-width: 1200px) {
+      body {
+        overflow-y: auto;
+      }
+
       .grid {
         grid-template-columns: 1fr;
         grid-template-rows: repeat(6, 360px);
-      }
-      body {
-        overflow-y: auto;
+        height: auto;
       }
     }
   </style>
 </head>
+
 <body>
   <header>
     <div class="title">Ze-Ri ROS2 VLM Dashboard</div>
     <div class="status">
-      <span class="badge"><span id="ws-dot" class="dot"></span><span id="ws-state">DISCONNECTED</span></span>
-      &nbsp; | &nbsp;
+      <span><span id="ws-dot" class="dot"></span> <span id="ws-state">DISCONNECTED</span></span>
+      <span>|</span>
       <span id="clock">-</span>
     </div>
   </header>
@@ -317,17 +314,25 @@ INDEX_HTML = r"""
           <div class="metric-label">STT 입력값</div>
           <div id="stt-text" class="metric-value">대기중</div>
         </div>
+
+        <div class="metric">
+          <div class="metric-label">TTS 출력</div>
+          <div id="robot-speech" class="metric-value">대기중</div>
+        </div>
+
+        <div class="metric">
+          <div class="metric-label">VLM 상태</div>
+          <div id="vlm-status" class="metric-value small">대기중</div>
+        </div>
+
         <div class="metric">
           <div class="metric-label">VLM 출력</div>
           <div id="vlm-output" class="metric-value small">대기중</div>
         </div>
+
         <div class="metric">
           <div class="metric-label">VLM 출력 근거</div>
           <div id="vlm-reason" class="metric-value small">대기중</div>
-        </div>
-        <div class="metric">
-          <div class="metric-label">로봇 발화문 / TTS 예정</div>
-          <div id="robot-speech" class="metric-value">대기중</div>
         </div>
       </div>
     </section>
@@ -346,11 +351,6 @@ INDEX_HTML = r"""
     </section>
   </main>
 
-  <div class="footer">
-    <div>RGB / Depth / Map / STT / VLM / Base / Arm topics are monitored through rclpy.</div>
-    <div id="last-update">last update: -</div>
-  </div>
-
   <script>
     const $ = (id) => document.getElementById(id);
 
@@ -368,10 +368,14 @@ INDEX_HTML = r"""
       }
     }
 
-    function fmtTs(ts) {
+    function fmtTs(ts, count) {
       if (!ts) return "대기중";
       const d = new Date(ts * 1000);
-      return d.toLocaleTimeString();
+      const t = d.toLocaleTimeString();
+      if (count !== undefined && count !== null) {
+        return `${t} | ${count}`;
+      }
+      return t;
     }
 
     function safeText(v, fallback = "대기중") {
@@ -385,14 +389,16 @@ INDEX_HTML = r"""
       setImg("depth-img", "depth-placeholder", data.depth_image);
       setImg("map-img", "map-placeholder", data.map_image);
 
-      $("rgb-ts").textContent = fmtTs(data.timestamps?.rgb);
-      $("depth-ts").textContent = fmtTs(data.timestamps?.depth);
-      $("map-ts").textContent = fmtTs(data.timestamps?.map);
+      $("rgb-ts").textContent = fmtTs(data.timestamps?.rgb, data.counts?.rgb);
+      $("depth-ts").textContent = fmtTs(data.timestamps?.depth, data.counts?.depth);
+      $("map-ts").textContent = fmtTs(data.timestamps?.map, data.counts?.map);
       $("vlm-ts").textContent = fmtTs(data.timestamps?.vlm || data.timestamps?.stt);
       $("base-ts").textContent = fmtTs(data.timestamps?.base);
       $("arm-ts").textContent = fmtTs(data.timestamps?.arm);
 
       $("stt-text").textContent = safeText(data.stt_text);
+      $("robot-speech").textContent = safeText(data.robot_speech || data.vlm_decision?.robot_speech);
+      $("vlm-status").textContent = safeText(data.inference_status);
 
       const d = data.vlm_decision || {};
       const vlmLines = [
@@ -401,17 +407,15 @@ INDEX_HTML = r"""
         `adapter_id: ${safeText(d.adapter_id, "-")}`,
         `confidence: ${safeText(d.confidence, "-")}`,
         `mock_action: ${safeText(d.mock_action, "-")}`,
-        `latency_sec: ${safeText(d.latency_sec, "-")}`
+        `latency_sec: ${safeText(d.latency_sec, "-")}`,
+        `rgb_topic: ${safeText(d.vlm_input_rgb_topic, "-")}`,
+        `depth_topic: ${safeText(d.vlm_input_depth_topic, "-")}`
       ];
       $("vlm-output").textContent = vlmLines.join("\n");
 
       $("vlm-reason").textContent = safeText(d.reason);
-      $("robot-speech").textContent = safeText(data.robot_speech || d.robot_speech);
-
       $("base-status").textContent = safeText(data.base_status);
       $("arm-status").textContent = safeText(data.arm_status);
-
-      $("last-update").textContent = "last update: " + new Date().toLocaleTimeString();
     }
 
     function connect() {
@@ -460,9 +464,15 @@ class SharedState:
             "stt_text": "",
             "vlm_decision": {},
             "robot_speech": "",
+            "inference_status": "대기중",
             "base_status": "데이터 대기중",
             "arm_status": "데이터 대기중",
             "timestamps": {},
+            "counts": {
+                "rgb": 0,
+                "depth": 0,
+                "map": 0,
+            },
         }
 
     def update(self, **kwargs: Any) -> None:
@@ -474,6 +484,11 @@ class SharedState:
         with self.lock:
             self.data.setdefault("timestamps", {})[key] = time.time()
 
+    def increment_count(self, key: str) -> None:
+        with self.lock:
+            self.data.setdefault("counts", {})
+            self.data["counts"][key] = int(self.data["counts"].get(key, 0)) + 1
+
     def snapshot(self) -> Dict[str, Any]:
         with self.lock:
             return json.loads(json.dumps(self.data, ensure_ascii=False))
@@ -483,7 +498,24 @@ STATE = SharedState()
 app = FastAPI()
 
 
-def encode_image_to_data_url(image_bgr: np.ndarray, ext: str = ".jpg", quality: int = 80) -> Optional[str]:
+def make_qos(reliability: str, depth: int) -> QoSProfile:
+    if reliability == "best_effort":
+        rel = ReliabilityPolicy.BEST_EFFORT
+    else:
+        rel = ReliabilityPolicy.RELIABLE
+
+    return QoSProfile(
+        history=HistoryPolicy.KEEP_LAST,
+        depth=depth,
+        reliability=rel,
+    )
+
+
+def encode_image_to_data_url(
+    image_bgr: Optional[np.ndarray],
+    ext: str = ".jpg",
+    quality: int = 80,
+) -> Optional[str]:
     if image_bgr is None:
         return None
 
@@ -510,7 +542,7 @@ def image_msg_to_bgr(msg: Image) -> Optional[np.ndarray]:
     if height <= 0 or width <= 0:
         return None
 
-    raw = msg.data
+    raw = bytes(msg.data)
 
     try:
         if encoding in ("bgr8", "rgb8"):
@@ -543,11 +575,7 @@ def image_msg_to_bgr(msg: Image) -> Optional[np.ndarray]:
             arr = arr.reshape((height, row_pixels))[:, :width]
             return cv2.cvtColor(arr.copy(), cv2.COLOR_GRAY2BGR)
 
-        # depth를 일반 이미지로 실수로 이 함수에 넣었을 때도 시각화
-        if encoding in ("16uc1", "mono16"):
-            return depth_msg_to_colormap(msg)
-
-        if encoding == "32fc1":
+        if encoding in ("16uc1", "mono16", "32fc1"):
             return depth_msg_to_colormap(msg)
 
     except Exception:
@@ -565,25 +593,23 @@ def depth_msg_to_colormap(msg: Image) -> Optional[np.ndarray]:
     if height <= 0 or width <= 0:
         return None
 
+    raw = bytes(msg.data)
+
     try:
         if encoding in ("16uc1", "mono16"):
-            arr = np.frombuffer(msg.data, dtype=np.uint16)
+            arr = np.frombuffer(raw, dtype=np.uint16)
             row_pixels = step // np.dtype(np.uint16).itemsize
             depth = arr.reshape((height, row_pixels))[:, :width].astype(np.float32)
-
-            # RealSense depth 16UC1은 보통 mm 단위인 경우가 많음.
-            # dashboard에서는 상대적 시각화만 하므로 그대로 정규화.
             valid = depth[depth > 0]
 
         elif encoding == "32fc1":
-            arr = np.frombuffer(msg.data, dtype=np.float32)
+            arr = np.frombuffer(raw, dtype=np.float32)
             row_pixels = step // np.dtype(np.float32).itemsize
             depth = arr.reshape((height, row_pixels))[:, :width].astype(np.float32)
-
             valid = depth[np.isfinite(depth) & (depth > 0)]
 
         elif encoding in ("mono8", "8uc1"):
-            arr = np.frombuffer(msg.data, dtype=np.uint8)
+            arr = np.frombuffer(raw, dtype=np.uint8)
             row_pixels = step
             gray = arr.reshape((height, row_pixels))[:, :width]
             return cv2.applyColorMap(gray.copy(), cv2.COLORMAP_JET)
@@ -596,6 +622,7 @@ def depth_msg_to_colormap(msg: Image) -> Optional[np.ndarray]:
         else:
             lo = float(np.percentile(valid, 5))
             hi = float(np.percentile(valid, 95))
+
             if hi <= lo:
                 hi = lo + 1.0
 
@@ -621,19 +648,22 @@ def occupancy_grid_to_png_data_url(msg: OccupancyGrid) -> Optional[str]:
     try:
         grid = np.array(msg.data, dtype=np.int16).reshape((height, width))
 
-        # ROS OccupancyGrid:
-        # -1 unknown, 0 free, 100 occupied
         img = np.zeros((height, width), dtype=np.uint8)
         img[grid < 0] = 127
         img[grid == 0] = 255
         img[(grid > 0) & (grid < 100)] = 180
         img[grid >= 100] = 0
 
-        # map은 보통 origin이 좌하단 기준이므로 화면 보기 좋게 상하 반전
         img = np.flipud(img)
 
         bgr = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-        bgr = cv2.resize(bgr, (max(320, width * 2), max(320, height * 2)), interpolation=cv2.INTER_NEAREST)
+
+        scale = max(1, min(4, 640 // max(1, width)))
+        bgr = cv2.resize(
+            bgr,
+            (width * scale, height * scale),
+            interpolation=cv2.INTER_NEAREST,
+        )
 
         return encode_image_to_data_url(bgr, ext=".png")
 
@@ -662,58 +692,69 @@ class ZeriDashboardNode(Node):
 
         self.args = args
 
-        sensor_qos = QoSProfile(
-            history=HistoryPolicy.KEEP_LAST,
-            depth=3,
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-        )
+        image_qos = make_qos(args.image_qos, args.image_qos_depth)
+        text_qos = make_qos("reliable", 10)
+        map_qos = make_qos(args.map_qos, 5)
 
-        text_qos = QoSProfile(
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10,
-            reliability=ReliabilityPolicy.RELIABLE,
-        )
-
-        self.create_subscription(Image, args.rgb_topic, self.rgb_callback, sensor_qos)
-        self.create_subscription(Image, args.depth_topic, self.depth_callback, sensor_qos)
-        self.create_subscription(OccupancyGrid, args.map_topic, self.map_callback, 10)
+        self.create_subscription(Image, args.rgb_topic, self.rgb_callback, image_qos)
+        self.create_subscription(Image, args.depth_topic, self.depth_callback, image_qos)
+        self.create_subscription(OccupancyGrid, args.map_topic, self.map_callback, map_qos)
 
         self.create_subscription(String, args.stt_topic, self.stt_callback, text_qos)
         self.create_subscription(String, args.vlm_decision_topic, self.vlm_decision_callback, text_qos)
         self.create_subscription(String, args.robot_speech_topic, self.robot_speech_callback, text_qos)
+        self.create_subscription(String, args.inference_status_topic, self.inference_status_callback, text_qos)
 
         self.create_subscription(String, args.base_status_topic, self.base_status_callback, text_qos)
         self.create_subscription(String, args.arm_status_topic, self.arm_status_callback, text_qos)
 
         self.get_logger().info("Ze-Ri Dashboard subscriptions:")
-        self.get_logger().info(f"  RGB:            {args.rgb_topic}")
-        self.get_logger().info(f"  Depth:          {args.depth_topic}")
-        self.get_logger().info(f"  Map:            {args.map_topic}")
-        self.get_logger().info(f"  STT:            {args.stt_topic}")
-        self.get_logger().info(f"  VLM decision:   {args.vlm_decision_topic}")
-        self.get_logger().info(f"  Robot speech:   {args.robot_speech_topic}")
-        self.get_logger().info(f"  Base status:    {args.base_status_topic}")
-        self.get_logger().info(f"  Arm status:     {args.arm_status_topic}")
+        self.get_logger().info(f"  RGB:              {args.rgb_topic}")
+        self.get_logger().info(f"  Depth:            {args.depth_topic}")
+        self.get_logger().info(f"  Map:              {args.map_topic}")
+        self.get_logger().info(f"  STT:              {args.stt_topic}")
+        self.get_logger().info(f"  VLM decision:     {args.vlm_decision_topic}")
+        self.get_logger().info(f"  Robot speech:     {args.robot_speech_topic}")
+        self.get_logger().info(f"  Inference status: {args.inference_status_topic}")
+        self.get_logger().info(f"  Base status:      {args.base_status_topic}")
+        self.get_logger().info(f"  Arm status:       {args.arm_status_topic}")
+        self.get_logger().info(f"  Image QoS:         {args.image_qos}")
 
     def rgb_callback(self, msg: Image) -> None:
         bgr = image_msg_to_bgr(msg)
-        data_url = encode_image_to_data_url(bgr, ext=".jpg", quality=self.args.jpeg_quality)
+        data_url = encode_image_to_data_url(
+            bgr,
+            ext=".jpg",
+            quality=self.args.jpeg_quality,
+        )
+
         if data_url:
             STATE.update(rgb_image=data_url)
             STATE.update_timestamp("rgb")
+            STATE.increment_count("rgb")
+            self.get_logger().debug("RGB frame updated.")
 
     def depth_callback(self, msg: Image) -> None:
         bgr = depth_msg_to_colormap(msg)
-        data_url = encode_image_to_data_url(bgr, ext=".jpg", quality=self.args.jpeg_quality)
+        data_url = encode_image_to_data_url(
+            bgr,
+            ext=".jpg",
+            quality=self.args.jpeg_quality,
+        )
+
         if data_url:
             STATE.update(depth_image=data_url)
             STATE.update_timestamp("depth")
+            STATE.increment_count("depth")
+            self.get_logger().debug("Depth frame updated.")
 
     def map_callback(self, msg: OccupancyGrid) -> None:
         data_url = occupancy_grid_to_png_data_url(msg)
+
         if data_url:
             STATE.update(map_image=data_url)
             STATE.update_timestamp("map")
+            STATE.increment_count("map")
 
     def stt_callback(self, msg: String) -> None:
         STATE.update(stt_text=msg.data)
@@ -722,7 +763,6 @@ class ZeriDashboardNode(Node):
     def vlm_decision_callback(self, msg: String) -> None:
         parsed = parse_json_string_or_raw(msg.data)
 
-        # decision JSON에 stt_text / robot_speech가 같이 들어오면 dashboard state도 갱신
         if "stt_text" in parsed:
             STATE.update(stt_text=str(parsed.get("stt_text", "")))
 
@@ -734,6 +774,10 @@ class ZeriDashboardNode(Node):
 
     def robot_speech_callback(self, msg: String) -> None:
         STATE.update(robot_speech=msg.data)
+        STATE.update_timestamp("vlm")
+
+    def inference_status_callback(self, msg: String) -> None:
+        STATE.update(inference_status=msg.data)
         STATE.update_timestamp("vlm")
 
     def base_status_callback(self, msg: String) -> None:
@@ -757,7 +801,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     try:
         while True:
             await websocket.send_text(json.dumps(STATE.snapshot(), ensure_ascii=False))
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.15)
     except WebSocketDisconnect:
         return
 
@@ -769,13 +813,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--jpeg-quality", type=int, default=75)
 
-    parser.add_argument("--rgb-topic", default="/camera/camera/color/image_raw")
-    parser.add_argument("--depth-topic", default="/camera/camera/depth/image_rect_raw")
+    parser.add_argument("--image-qos", choices=["reliable", "best_effort"], default="reliable")
+    parser.add_argument("--map-qos", choices=["reliable", "best_effort"], default="reliable")
+    parser.add_argument("--image-qos-depth", type=int, default=10)
+
+    parser.add_argument("--rgb-topic", default="/zeri/vlm/input_rgb")
+    parser.add_argument("--depth-topic", default="/zeri/vlm/input_depth")
     parser.add_argument("--map-topic", default="/map")
 
     parser.add_argument("--stt-topic", default="/zeri/stt/text")
     parser.add_argument("--vlm-decision-topic", default="/zeri/vlm/decision")
     parser.add_argument("--robot-speech-topic", default="/zeri/vlm/robot_speech")
+    parser.add_argument("--inference-status-topic", default="/zeri/vlm/inference_status")
 
     parser.add_argument("--base-status-topic", default="/zeri/mobile_base/status")
     parser.add_argument("--arm-status-topic", default="/zeri/arm/status")
@@ -802,7 +851,7 @@ def main() -> None:
     print("====================================================")
     print(" Ze-Ri ROS2 Dashboard")
     print(f" URL: http://{args.host}:{args.port}")
-    print(" If using remote browser, open:")
+    print(" Remote:")
     print(f" http://<ROBOT_IP>:{args.port}")
     print("====================================================")
     print("")
@@ -818,7 +867,10 @@ def main() -> None:
         server.run()
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+
+        if rclpy.ok():
+            rclpy.shutdown()
+
         spin_thread.join(timeout=2.0)
 
 
