@@ -51,11 +51,11 @@ INDEX_HTML = r"""
       background: var(--bg);
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       color: var(--dark);
-      overflow: hidden;
+      overflow: auto;
     }
 
     header {
-      height: 46px;
+      height: 42px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -66,18 +66,18 @@ INDEX_HTML = r"""
     }
 
     header .title {
-      font-size: 20px;
+      font-size: 18px;
       font-weight: 900;
       letter-spacing: 0.2px;
     }
 
     header .status {
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 700;
       color: #bfdbfe;
       display: flex;
       align-items: center;
-      gap: 14px;
+      gap: 12px;
     }
 
     .dot {
@@ -95,10 +95,12 @@ INDEX_HTML = r"""
     .grid {
       display: grid;
       grid-template-columns: 1.05fr 1.05fr 0.95fr;
-      grid-template-rows: calc((100vh - 50px) / 2) calc((100vh - 50px) / 2);
-      gap: 14px;
-      padding: 14px 10px 10px 10px;
-      height: calc(100vh - 46px);
+      grid-template-rows: 280px 280px;
+      gap: 12px;
+      padding: 12px 10px 10px 10px;
+      height: auto;
+      max-width: 1500px;
+      margin: 0 auto;
     }
 
     .card {
@@ -115,10 +117,10 @@ INDEX_HTML = r"""
     }
 
     .card-title {
-      height: 38px;
-      flex: 0 0 38px;
-      padding: 8px 12px;
-      font-size: 18px;
+      height: 32px;
+      flex: 0 0 32px;
+      padding: 6px 10px;
+      font-size: 16px;
       font-weight: 900;
       background: rgba(0, 0, 0, 0.17);
       border-bottom: 1px solid rgba(255, 255, 255, 0.18);
@@ -128,7 +130,7 @@ INDEX_HTML = r"""
     }
 
     .card-title small {
-      font-size: 11px;
+      font-size: 10px;
       color: var(--muted);
       font-weight: 800;
       text-align: right;
@@ -158,23 +160,23 @@ INDEX_HTML = r"""
 
     .placeholder {
       color: #bfdbfe;
-      font-size: 25px;
+      font-size: 22px;
       font-weight: 900;
       text-align: center;
-      padding: 16px;
+      padding: 14px;
     }
 
     .text-panel {
       flex: 1;
       min-height: 0;
-      padding: 14px;
+      padding: 10px;
       overflow: auto;
       background: rgba(5, 20, 48, 0.20);
     }
 
     .metric {
-      margin-bottom: 12px;
-      padding: 10px 12px;
+      margin-bottom: 8px;
+      padding: 8px 10px;
       background: rgba(255, 255, 255, 0.13);
       border: 1px solid rgba(255, 255, 255, 0.18);
       border-radius: 8px;
@@ -182,52 +184,52 @@ INDEX_HTML = r"""
 
     .metric-label {
       color: #dbeafe;
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 900;
-      margin-bottom: 5px;
+      margin-bottom: 4px;
     }
 
     .metric-value {
       color: white;
-      font-size: 20px;
+      font-size: 17px;
       font-weight: 800;
       white-space: pre-wrap;
       word-break: break-word;
     }
 
     .metric-value.small {
-      font-size: 14px;
-      line-height: 1.45;
+      font-size: 12px;
+      line-height: 1.35;
       font-weight: 700;
     }
 
     .status-big {
       flex: 1;
       min-height: 0;
-      padding: 18px;
+      padding: 14px;
       display: flex;
       flex-direction: column;
       justify-content: center;
-      gap: 12px;
+      gap: 10px;
       background: rgba(5, 20, 48, 0.15);
     }
 
     .status-line {
-      padding: 14px;
+      padding: 12px;
       border-radius: 8px;
       background: rgba(255, 255, 255, 0.13);
       border: 1px solid rgba(255, 255, 255, 0.18);
     }
 
     .status-line .label {
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 900;
       color: #dbeafe;
       margin-bottom: 6px;
     }
 
     .status-line .value {
-      font-size: 28px;
+      font-size: 24px;
       font-weight: 900;
       color: white;
       word-break: break-word;
@@ -240,7 +242,7 @@ INDEX_HTML = r"""
 
       .grid {
         grid-template-columns: 1fr;
-        grid-template-rows: repeat(6, 360px);
+        grid-template-rows: repeat(6, 300px);
         height: auto;
       }
     }
@@ -411,8 +413,8 @@ INDEX_HTML = r"""
         `rgb_topic: ${safeText(d.vlm_input_rgb_topic, "-")}`,
         `depth_topic: ${safeText(d.vlm_input_depth_topic, "-")}`
       ];
-      $("vlm-output").textContent = vlmLines.join("\n");
 
+      $("vlm-output").textContent = vlmLines.join("\n");
       $("vlm-reason").textContent = safeText(d.reason);
       $("base-status").textContent = safeText(data.base_status);
       $("arm-status").textContent = safeText(data.arm_status);
@@ -718,7 +720,7 @@ class ZeriDashboardNode(Node):
         self.get_logger().info(f"  Inference status: {args.inference_status_topic}")
         self.get_logger().info(f"  Base status:      {args.base_status_topic}")
         self.get_logger().info(f"  Arm status:       {args.arm_status_topic}")
-        self.get_logger().info(f"  Image QoS:         {args.image_qos}")
+        self.get_logger().info(f"  Image QoS:        {args.image_qos}")
 
     def rgb_callback(self, msg: Image) -> None:
         bgr = image_msg_to_bgr(msg)
