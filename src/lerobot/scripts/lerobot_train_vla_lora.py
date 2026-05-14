@@ -211,7 +211,7 @@ XVLA_ACTION_MLP_SUFFIXES = (
     ".mlp.fc1",
     ".mlp.fc2",
 )
-XVLA_ACTION_WITH_MLP = False
+XVLA_ACTION_WITH_MLP = True
 
 # XVLA base checkpoint has model.transformer.pos_emb length 512.
 # Some real datasets produce longer sequences, e.g. 1204.
