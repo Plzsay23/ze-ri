@@ -410,8 +410,11 @@ INDEX_HTML = r"""
         `confidence: ${safeText(d.confidence, "-")}`,
         `mock_action: ${safeText(d.mock_action, "-")}`,
         `latency_sec: ${safeText(d.latency_sec, "-")}`,
-        `rgb_topic: ${safeText(d.vlm_input_rgb_topic, "-")}`,
-        `depth_topic: ${safeText(d.vlm_input_depth_topic, "-")}`
+        `camera_age_sec: ${safeText(d.camera_age_sec, "-")}`,
+        `live_rgb_topic: ${safeText(d.live_rgb_topic, "-")}`,
+        `live_depth_topic: ${safeText(d.live_depth_topic, "-")}`,
+        `vlm_rgb_snapshot: ${safeText(d.vlm_input_rgb_topic, "-")}`,
+        `vlm_depth_snapshot: ${safeText(d.vlm_input_depth_topic, "-")}`
       ];
 
       $("vlm-output").textContent = vlmLines.join("\n");
@@ -657,7 +660,6 @@ def occupancy_grid_to_png_data_url(msg: OccupancyGrid) -> Optional[str]:
         img[grid >= 100] = 0
 
         img = np.flipud(img)
-
         bgr = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
         scale = max(1, min(4, 640 // max(1, width)))
@@ -734,7 +736,6 @@ class ZeriDashboardNode(Node):
             STATE.update(rgb_image=data_url)
             STATE.update_timestamp("rgb")
             STATE.increment_count("rgb")
-            self.get_logger().debug("RGB frame updated.")
 
     def depth_callback(self, msg: Image) -> None:
         bgr = depth_msg_to_colormap(msg)
@@ -748,7 +749,6 @@ class ZeriDashboardNode(Node):
             STATE.update(depth_image=data_url)
             STATE.update_timestamp("depth")
             STATE.increment_count("depth")
-            self.get_logger().debug("Depth frame updated.")
 
     def map_callback(self, msg: OccupancyGrid) -> None:
         data_url = occupancy_grid_to_png_data_url(msg)
@@ -815,12 +815,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--jpeg-quality", type=int, default=75)
 
-    parser.add_argument("--image-qos", choices=["reliable", "best_effort"], default="reliable")
+    parser.add_argument("--image-qos", choices=["reliable", "best_effort"], default="best_effort")
     parser.add_argument("--map-qos", choices=["reliable", "best_effort"], default="reliable")
     parser.add_argument("--image-qos-depth", type=int, default=10)
 
-    parser.add_argument("--rgb-topic", default="/zeri/vlm/input_rgb")
-    parser.add_argument("--depth-topic", default="/zeri/vlm/input_depth")
+    parser.add_argument("--rgb-topic", default="/zeri/top/rgb/image_raw")
+    parser.add_argument("--depth-topic", default="/zeri/top/depth/image_raw")
     parser.add_argument("--map-topic", default="/map")
 
     parser.add_argument("--stt-topic", default="/zeri/stt/text")
