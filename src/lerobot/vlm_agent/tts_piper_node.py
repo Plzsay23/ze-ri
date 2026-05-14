@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# src/lerobot/vlm_agent/tts_piper_node.py
+# src/lerobot/vlm_agent/tts_edge_node.py
 
 import os
 import queue
@@ -23,9 +23,9 @@ def make_reliable_qos(depth: int = 10) -> QoSProfile:
     )
 
 
-class PiperTTSNode(Node):
+class EdgeTTSNode(Node):
     """
-    Ze-Ri TTS node.
+    Ze-Ri Edge TTS node.
 
     입력:
       /zeri/vlm/robot_speech  std_msgs/String
@@ -34,68 +34,43 @@ class PiperTTSNode(Node):
       실제 스피커 출력
       /zeri/tts/status         std_msgs/String
 
-    backend:
-      - piper_rs:
-          neurlang/piper-rs interactive 예제 사용.
-          piper-kss-korean.onnx.json처럼 phoneme_type=pygoruut 모델용.
-
-      - piper_cli:
-          Python piper-tts CLI 사용.
-          일반 Piper 모델용.
+    기본 음성:
+      ko-KR-SunHiNeural
     """
 
     def __init__(self) -> None:
-        super().__init__("zeri_tts_piper_node")
+        super().__init__("zeri_tts_edge_node")
 
-        # ROS topics
         self.declare_parameter("input_topic", "/zeri/vlm/robot_speech")
         self.declare_parameter("status_topic", "/zeri/tts/status")
 
-        # backend selection
-        self.declare_parameter("backend", "piper_rs")
+        self.declare_parameter("edge_tts_bin", "edge-tts")
+        self.declare_parameter("voice", "ko-KR-SunHiNeural")
+        self.declare_parameter("rate", "+0%")
+        self.declare_parameter("volume", "+0%")
+        self.declare_parameter("pitch", "+0Hz")
 
-        # piper-rs backend
-        self.declare_parameter(
-            "piper_rs_bin",
-            "/home/hansungai/tools/piper-rs/target/release/examples/interactive",
-        )
-        self.declare_parameter(
-            "config_path",
-            "/home/hansungai/voicebot/piper_models/piper-kss-korean.onnx.json",
-        )
-        self.declare_parameter("piper_rs_volume", 80)
+        self.declare_parameter("output_mp3", "/tmp/zeri_tts_output.mp3")
+        self.declare_parameter("player", "ffplay")
+        self.declare_parameter("player_mode", "ffplay")
 
-        # python piper CLI backend
-        self.declare_parameter("piper_bin", "piper")
-        self.declare_parameter(
-            "model_path",
-            "/home/hansungai/voicebot/piper_models/piper-kss-korean.onnx",
-        )
-
-        # playback for piper_cli backend only
-        self.declare_parameter("player", "/home/hansungai/usb_speaker_play.sh")
-        self.declare_parameter("output_wav", "/tmp/zeri_tts_output.wav")
-
-        # filtering
         self.declare_parameter("min_chars", 2)
         self.declare_parameter("duplicate_window_sec", 5.0)
-        self.declare_parameter("cooldown_sec", 0.5)
+        self.declare_parameter("cooldown_sec", 0.3)
         self.declare_parameter("queue_size", 4)
 
         self.input_topic = str(self.get_parameter("input_topic").value)
         self.status_topic = str(self.get_parameter("status_topic").value)
 
-        self.backend = str(self.get_parameter("backend").value)
+        self.edge_tts_bin = str(self.get_parameter("edge_tts_bin").value)
+        self.voice = str(self.get_parameter("voice").value)
+        self.rate = str(self.get_parameter("rate").value)
+        self.volume = str(self.get_parameter("volume").value)
+        self.pitch = str(self.get_parameter("pitch").value)
 
-        self.piper_rs_bin = str(self.get_parameter("piper_rs_bin").value)
-        self.config_path = str(self.get_parameter("config_path").value)
-        self.piper_rs_volume = int(self.get_parameter("piper_rs_volume").value)
-
-        self.piper_bin = str(self.get_parameter("piper_bin").value)
-        self.model_path = str(self.get_parameter("model_path").value)
-
+        self.output_mp3 = str(self.get_parameter("output_mp3").value)
         self.player = str(self.get_parameter("player").value)
-        self.output_wav = str(self.get_parameter("output_wav").value)
+        self.player_mode = str(self.get_parameter("player_mode").value)
 
         self.min_chars = int(self.get_parameter("min_chars").value)
         self.duplicate_window_sec = float(
@@ -131,59 +106,19 @@ class PiperTTSNode(Node):
         )
         self.worker.start()
 
-        self.get_logger().info("Zeri TTS node ready.")
+        self.get_logger().info("Zeri Edge TTS node ready.")
         self.get_logger().info(f"  input_topic: {self.input_topic}")
         self.get_logger().info(f"  status_topic: {self.status_topic}")
-        self.get_logger().info(f"  backend: {self.backend}")
-
-        self.get_logger().info("piper-rs settings:")
-        self.get_logger().info(f"  piper_rs_bin: {self.piper_rs_bin}")
-        self.get_logger().info(f"  config_path: {self.config_path}")
-        self.get_logger().info(f"  piper_rs_volume: {self.piper_rs_volume}")
-
-        self.get_logger().info("piper CLI settings:")
-        self.get_logger().info(f"  piper_bin: {self.piper_bin}")
-        self.get_logger().info(f"  model_path: {self.model_path}")
+        self.get_logger().info(f"  edge_tts_bin: {self.edge_tts_bin}")
+        self.get_logger().info(f"  voice: {self.voice}")
+        self.get_logger().info(f"  rate: {self.rate}")
+        self.get_logger().info(f"  volume: {self.volume}")
+        self.get_logger().info(f"  pitch: {self.pitch}")
+        self.get_logger().info(f"  output_mp3: {self.output_mp3}")
         self.get_logger().info(f"  player: {self.player}")
-        self.get_logger().info(f"  output_wav: {self.output_wav}")
+        self.get_logger().info(f"  player_mode: {self.player_mode}")
 
-        self.validate_initial_config()
         self.publish_status("idle")
-
-    def validate_initial_config(self) -> None:
-        if self.backend == "piper_rs":
-            if not os.path.exists(self.piper_rs_bin):
-                self.get_logger().warn(
-                    f"piper_rs_bin does not exist: {self.piper_rs_bin}"
-                )
-
-            if not os.path.exists(self.config_path):
-                self.get_logger().warn(
-                    f"config_path does not exist: {self.config_path}"
-                )
-
-        elif self.backend == "piper_cli":
-            if not self.model_path:
-                self.get_logger().warn(
-                    "model_path is empty. "
-                    "Run with -p model_path:=/path/to/model.onnx"
-                )
-
-            if not os.path.exists(self.model_path):
-                self.get_logger().warn(
-                    f"model_path does not exist: {self.model_path}"
-                )
-
-            if self.config_path and not os.path.exists(self.config_path):
-                self.get_logger().warn(
-                    f"config_path does not exist: {self.config_path}"
-                )
-
-        else:
-            self.get_logger().warn(
-                f"Unknown backend={self.backend}. "
-                "Valid values: piper_rs, piper_cli"
-            )
 
     def publish_status(self, status: str) -> None:
         msg = String()
@@ -194,6 +129,31 @@ class PiperTTSNode(Node):
     def normalize_text(self, text: str) -> str:
         text = text.strip()
         text = " ".join(text.split())
+
+        replacements = {
+            "산소마스크": "산소 마스크",
+            "VLM": "브이 엘 엠",
+            "STT": "에스 티 티",
+            "TTS": "티 티 에스",
+            "LoRA": "로라",
+            "adapter": "어댑터",
+            "Adapter": "어댑터",
+            "idle": "대기",
+            "oxygen": "산소",
+        }
+
+        for src, dst in replacements.items():
+            text = text.replace(src, dst)
+
+        text = text.replace(
+            "현재 산소 마스크 전달은 필요하지 않습니다.",
+            "산소 마스크는 아직 필요하지 않습니다.",
+        )
+        text = text.replace(
+            "계속 상황을 확인하겠습니다.",
+            "계속 확인하겠습니다.",
+        )
+
         return text
 
     def text_callback(self, msg: String) -> None:
@@ -234,165 +194,130 @@ class PiperTTSNode(Node):
             except queue.Full:
                 self.publish_status("queue_full_error")
 
-    def build_piper_cli_command(self, output_wav: str) -> list[str]:
+    def build_edge_tts_command(self, text: str) -> list[str]:
         cmd = [
-            self.piper_bin,
-            "--model",
-            self.model_path,
-            "--output_file",
-            output_wav,
+            self.edge_tts_bin,
+            "--voice",
+            self.voice,
+            "--text",
+            text,
+            "--write-media",
+            self.output_mp3,
         ]
 
-        if self.config_path:
-            cmd.extend(["--config", self.config_path])
+        if self.rate:
+            cmd.extend(["--rate", self.rate])
+
+        if self.volume:
+            cmd.extend(["--volume", self.volume])
+
+        if self.pitch:
+            cmd.extend(["--pitch", self.pitch])
 
         return cmd
 
-    def run_piper_rs(self, text: str) -> None:
-        """
-        neurlang/piper-rs interactive backend.
+    def run_edge_tts(self, text: str) -> None:
+        if os.path.exists(self.output_mp3):
+            try:
+                os.remove(self.output_mp3)
+            except OSError:
+                pass
 
-        예시 수동 실행:
-          cd /home/hansungai/voicebot/piper_models
-          printf "여기 산소마스크입니다.\\n" | \
-            /home/hansungai/tools/piper-rs/target/release/examples/interactive \
-            /home/hansungai/voicebot/piper_models/piper-kss-korean.onnx.json 80
-
-        piper-rs interactive는 직접 오디오를 출력하므로 wav 재생 단계가 없다.
-        """
-
-        if not self.piper_rs_bin:
-            raise RuntimeError("piper_rs_bin is empty.")
-
-        if not os.path.exists(self.piper_rs_bin):
-            raise RuntimeError(f"piper_rs_bin does not exist: {self.piper_rs_bin}")
-
-        if not self.config_path:
-            raise RuntimeError("config_path is empty for piper_rs backend.")
-
-        if not os.path.exists(self.config_path):
-            raise RuntimeError(f"config_path does not exist: {self.config_path}")
-
-        config_dir = os.path.dirname(os.path.abspath(self.config_path))
-
-        cmd = [
-            self.piper_rs_bin,
-            self.config_path,
-            str(self.piper_rs_volume),
-        ]
+        cmd = self.build_edge_tts_command(text)
 
         self.get_logger().info(
-            f"Running piper-rs: {' '.join(shlex.quote(x) for x in cmd)}"
+            f"Running Edge TTS: {' '.join(shlex.quote(x) for x in cmd)}"
         )
-        self.get_logger().info(f"piper-rs cwd: {config_dir}")
 
         proc = subprocess.run(
             cmd,
-            input=text + "\n",
-            text=True,
-            cwd=config_dir,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            text=True,
             check=False,
         )
 
         if proc.returncode != 0:
             raise RuntimeError(
-                f"piper-rs failed with code {proc.returncode}\n"
+                f"edge-tts failed with code {proc.returncode}\n"
                 f"stdout={proc.stdout}\n"
                 f"stderr={proc.stderr}"
             )
 
-    def run_piper_cli(self, text: str, output_wav: str) -> None:
-        """
-        Python piper-tts CLI backend.
-        일반 Piper voice 모델에서 사용한다.
-        """
+        if not os.path.exists(self.output_mp3):
+            raise RuntimeError(f"Edge TTS output file was not created: {self.output_mp3}")
 
-        if not self.model_path:
-            raise RuntimeError("model_path is empty.")
+        if os.path.getsize(self.output_mp3) == 0:
+            raise RuntimeError(f"Edge TTS output file is empty: {self.output_mp3}")
 
-        if not os.path.exists(self.model_path):
-            raise RuntimeError(f"model_path does not exist: {self.model_path}")
+    def build_player_command(self) -> list[str]:
+        if self.player_mode == "ffplay":
+            return [
+                self.player,
+                "-nodisp",
+                "-autoexit",
+                "-loglevel",
+                "error",
+                self.output_mp3,
+            ]
 
-        if self.config_path and not os.path.exists(self.config_path):
-            raise RuntimeError(f"config_path does not exist: {self.config_path}")
+        if self.player_mode == "mpg123":
+            return [
+                self.player,
+                self.output_mp3,
+            ]
 
-        cmd = self.build_piper_cli_command(output_wav)
+        if self.player_mode == "paplay":
+            return [
+                self.player,
+                self.output_mp3,
+            ]
 
-        self.get_logger().info(
-            f"Running Piper CLI: {' '.join(shlex.quote(x) for x in cmd)}"
+        if self.player_mode == "custom":
+            return [
+                self.player,
+                self.output_mp3,
+            ]
+
+        raise RuntimeError(
+            f"Unknown player_mode={self.player_mode}. "
+            "Valid values: ffplay, mpg123, paplay, custom"
         )
 
-        proc = subprocess.run(
-            cmd,
-            input=text,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
-
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"Piper CLI failed with code {proc.returncode}\n"
-                f"stdout={proc.stdout}\n"
-                f"stderr={proc.stderr}"
-            )
-
-        if not os.path.exists(output_wav) or os.path.getsize(output_wav) == 0:
-            raise RuntimeError(f"Piper output wav was not created: {output_wav}")
-
-    def play_wav(self, wav_path: str) -> None:
-        if self.player == "none":
-            self.get_logger().info(f"Playback disabled. wav_path={wav_path}")
-            return
-
-        if not self.player:
-            raise RuntimeError("player is empty.")
-
-        cmd = [self.player, wav_path]
+    def play_audio(self) -> None:
+        cmd = self.build_player_command()
 
         self.get_logger().info(
-            f"Playing wav: {' '.join(shlex.quote(x) for x in cmd)}"
+            f"Playing audio: {' '.join(shlex.quote(x) for x in cmd)}"
         )
 
         proc = subprocess.run(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            text=False,
             check=False,
         )
 
         if proc.returncode != 0:
+            stdout = proc.stdout.decode(errors="ignore") if proc.stdout else ""
+            stderr = proc.stderr.decode(errors="ignore") if proc.stderr else ""
             raise RuntimeError(
-                f"Audio player failed with code {proc.returncode}\n"
-                f"stdout={proc.stdout.decode(errors='ignore')}\n"
-                f"stderr={proc.stderr.decode(errors='ignore')}"
+                f"audio player failed with code {proc.returncode}\n"
+                f"stdout={stdout}\n"
+                f"stderr={stderr}"
             )
 
     def synthesize_and_play(self, text: str) -> None:
-        if self.backend == "piper_rs":
-            self.publish_status("synthesizing_piper_rs")
-            self.run_piper_rs(text)
-            self.publish_status("played_by_piper_rs")
-            return
+        self.publish_status("synthesizing_edge_tts")
+        self.get_logger().info(f"[TTS TEXT] {text}")
 
-        if self.backend == "piper_cli":
-            self.publish_status("synthesizing_piper_cli")
-            self.run_piper_cli(
-                text=text,
-                output_wav=self.output_wav,
-            )
+        self.run_edge_tts(text)
 
-            self.publish_status("playing")
-            self.play_wav(self.output_wav)
-            return
+        self.publish_status("playing")
+        self.play_audio()
 
-        raise RuntimeError(
-            f"Unknown backend={self.backend}. "
-            "Valid values: piper_rs, piper_cli"
-        )
+        self.publish_status("idle")
 
     def worker_loop(self) -> None:
         while not self.stop_event.is_set():
@@ -402,9 +327,7 @@ class PiperTTSNode(Node):
                 continue
 
             try:
-                self.get_logger().info(f"[TTS TEXT] {text}")
                 self.synthesize_and_play(text)
-                self.publish_status("idle")
 
                 if self.cooldown_sec > 0:
                     time.sleep(self.cooldown_sec)
@@ -414,7 +337,7 @@ class PiperTTSNode(Node):
                 self.publish_status(f"error: {exc}")
 
     def destroy_node(self) -> None:
-        self.get_logger().info("Stopping TTS node.")
+        self.get_logger().info("Stopping Edge TTS node.")
 
         try:
             self.publish_status("shutting_down")
@@ -432,10 +355,10 @@ class PiperTTSNode(Node):
 def main() -> None:
     rclpy.init()
 
-    node: Optional[PiperTTSNode] = None
+    node: Optional[EdgeTTSNode] = None
 
     try:
-        node = PiperTTSNode()
+        node = EdgeTTSNode()
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
