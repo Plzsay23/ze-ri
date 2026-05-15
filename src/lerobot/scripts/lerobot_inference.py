@@ -27,7 +27,7 @@ from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraCon
 from lerobot.configs import parser
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.datasets.pipeline_features import aggregate_pipeline_dataset_features, create_initial_features
-from lerobot.datasets.utils import build_dataset_frame, combine_feature_dicts
+from lerobot.utils.feature_utils import build_dataset_frame, combine_feature_dicts
 from lerobot.policies.factory import get_policy_class, make_pre_post_processors
 from lerobot.policies.utils import make_robot_action
 from lerobot.processor import make_default_processors
