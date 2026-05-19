@@ -1,11 +1,11 @@
 {
-  "default_policy_id": "black_act",
+  "default_policy_id": "mask_2_xvla_thor",
   "policies": [
     {
-      "id": "black_act",
-      "policy_type": "act",
-      "pretrained_name_or_path": "plzsay/black_act",
-      "description": "불확실하거나 대기해야 할 때 안전 정지 또는 안전 자세를 유지한다."
+      "id": "mask_2_xvla_thor",
+      "policy_type": "xvla",
+      "pretrained_name_or_path": "plzsay/mask_2_xvla_thor",
+      "description": "팔 뒤쪽에 있는 마스크를 집어서 앞으로 전달한다."
     },
     {
       "id": "blue_act",

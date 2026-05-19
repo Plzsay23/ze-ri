@@ -19,7 +19,7 @@ from qwen_vl_utils import process_vision_info
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image as RosImage
-from std_msgs.msg import Bool, Float32, String
+from std_msgs.msg import String
 from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
 
 
@@ -27,14 +27,14 @@ SYSTEM_PROMPT = """
 너는 재난 상황 초동 조치를 위한 모바일 매니퓰레이터 Ze-Ri의 VLM 에이전트다.
 
 현재 시스템에는 실제 로봇 정책 모델이 아직 없다.
-그러나 산소 마스크 전달 정책 모델이 존재한다고 가정한다.
+그러나 산소마스크 전달 정책 모델이 존재한다고 가정한다.
 
 입력:
 - top-view RGB 카메라 이미지
 - STT에서 들어온 사용자 텍스트
 
 목표:
-- 산소 마스크 전달이 필요한 상황인지 판단한다.
+- 산소마스크 전달이 필요한 상황인지 판단한다.
 - 필요하면 adapter_id를 "oxygen_mask_delivery_lora"로 선택한다.
 - 필요하지 않으면 adapter_id를 "idle_lora"로 선택한다.
 - 로봇이 사람에게 말할 짧은 발화문도 생성한다.
@@ -43,9 +43,9 @@ SYSTEM_PROMPT = """
 
 판단 기준:
 - "숨쉬기 힘들다", "숨을 못 쉬겠다", "산소가 필요하다", "질식할 것 같다",
-  "가스 냄새가 난다", "연기 때문에 숨을 못 쉬겠다" 등은 산소 마스크 전달 필요.
-- 장면에 사람이 있고 연기/화재/유독가스 위험이 추정되면 산소 마스크 전달 필요.
-- 장면이 애매해도 사용자 텍스트가 호흡 곤란이면 산소 마스크 전달 필요.
+  "가스 냄새가 난다", "연기 때문에 숨을 못 쉬겠다" 등은 산소마스크 전달 필요.
+- 장면에 사람이 있고 연기/화재/유독가스 위험이 추정되면 산소마스크 전달 필요.
+- 장면이 애매해도 사용자 텍스트가 호흡 곤란이면 산소마스크 전달 필요.
 - 일반 대화, 인사, 위험 없음이면 idle.
 
 출력 JSON schema:
@@ -59,16 +59,16 @@ SYSTEM_PROMPT = """
 }
 
 robot_speech 규칙:
-- 산소 마스크 전달이 필요하면 안심시키는 문장으로 말한다.
-  예: "여기 산소 마스크입니다. 천천히 호흡하세요."
-- 산소 마스크 전달이 필요하지 않으면 짧게 대기 상태를 말한다.
-  예: "산소 마스크는 아직 필요하지 않습니다. 계속 확인하겠습니다."
+- 산소마스크 전달이 필요하면 안심시키는 문장으로 말한다.
+  예: "여기 산소마스크입니다. 천천히 호흡하세요."
+- 산소마스크 전달이 필요하지 않으면 짧게 대기 상태를 말한다.
+  예: "현재 산소마스크 전달은 필요하지 않습니다. 계속 상황을 확인하겠습니다."
 - robot_speech는 TTS로 읽을 수 있도록 한 문장 또는 두 문장 이내로 짧게 작성한다.
 """
 
 
 USER_PROMPT_TEMPLATE = """
-현재 카메라 장면과 STT 텍스트를 보고 산소 마스크 전달 모델을 실행해야 하는지 판단해라.
+현재 카메라 장면과 STT 텍스트를 보고 산소마스크 전달 모델을 실행해야 하는지 판단해라.
 
 STT 텍스트:
 "{stt_text}"
@@ -161,13 +161,13 @@ def normalize_decision(parsed: Optional[Dict[str, Any]], raw_text: str) -> VLMDe
         adapter_id = "oxygen_mask_delivery_lora"
 
         if not robot_speech:
-            robot_speech = "여기 산소 마스크입니다. 천천히 호흡하세요."
+            robot_speech = "여기 산소마스크입니다. 천천히 호흡하세요."
     else:
         selected_task = "idle"
         adapter_id = "idle_lora"
 
         if not robot_speech:
-            robot_speech = "산소 마스크는 아직 필요하지 않습니다. 계속 확인하겠습니다."
+            robot_speech = "현재 산소마스크 전달은 필요하지 않습니다. 계속 상황을 확인하겠습니다."
 
     return VLMDecision(
         need_oxygen_mask=need,
@@ -368,29 +368,19 @@ class ZeriVLMSTTBridgeNode(Node):
         self.declare_parameter("vlm_input_depth_topic", "/zeri/vlm/input_depth")
         self.declare_parameter("inference_status_topic", "/zeri/vlm/inference_status")
 
-        self.declare_parameter("tts_status_topic", "/zeri/tts/status")
-        self.declare_parameter("stt_mute_topic", "/zeri/stt/mute")
-
-        self.declare_parameter("vad_topic", "/zeri/audio/vad")
-        self.declare_parameter("doa_topic", "/zeri/audio/doa_deg")
-        self.declare_parameter("use_vad_gate", False)
-        self.declare_parameter("vad_hold_sec", 1.2)
-
         self.declare_parameter("model_id", "Qwen/Qwen3-VL-8B-Instruct")
         self.declare_parameter("dtype", "bf16")
         self.declare_parameter("max_new_tokens", 128)
         self.declare_parameter("confidence_threshold", 0.50)
         self.declare_parameter("queue_size", 4)
 
+        # STT gate parameters
         self.declare_parameter("stt_gate_mode", "wake")
         self.declare_parameter("stt_min_chars", 3)
         self.declare_parameter("wake_listen_window_sec", 8.0)
         self.declare_parameter("min_inference_interval_sec", 2.0)
         self.declare_parameter("duplicate_window_sec", 5.0)
         self.declare_parameter("wake_words", ["제리", "제리야"])
-
-        self.declare_parameter("stt_block_after_tts_sec", 0.8)
-        self.declare_parameter("tts_max_wait_sec", 20.0)
 
         self.rgb_topic = str(self.get_parameter("rgb_topic").value)
         self.depth_topic = str(self.get_parameter("depth_topic").value)
@@ -401,14 +391,6 @@ class ZeriVLMSTTBridgeNode(Node):
         self.vlm_input_rgb_topic = str(self.get_parameter("vlm_input_rgb_topic").value)
         self.vlm_input_depth_topic = str(self.get_parameter("vlm_input_depth_topic").value)
         self.inference_status_topic = str(self.get_parameter("inference_status_topic").value)
-
-        self.tts_status_topic = str(self.get_parameter("tts_status_topic").value)
-        self.stt_mute_topic = str(self.get_parameter("stt_mute_topic").value)
-
-        self.vad_topic = str(self.get_parameter("vad_topic").value)
-        self.doa_topic = str(self.get_parameter("doa_topic").value)
-        self.use_vad_gate = bool(self.get_parameter("use_vad_gate").value)
-        self.vad_hold_sec = float(self.get_parameter("vad_hold_sec").value)
 
         model_id = str(self.get_parameter("model_id").value)
         dtype = str(self.get_parameter("dtype").value)
@@ -423,11 +405,6 @@ class ZeriVLMSTTBridgeNode(Node):
             self.get_parameter("min_inference_interval_sec").value
         )
         self.duplicate_window_sec = float(self.get_parameter("duplicate_window_sec").value)
-
-        self.stt_block_after_tts_sec = float(
-            self.get_parameter("stt_block_after_tts_sec").value
-        )
-        self.tts_max_wait_sec = float(self.get_parameter("tts_max_wait_sec").value)
 
         wake_words_param = self.get_parameter("wake_words").value
         self.wake_words = [
@@ -452,19 +429,6 @@ class ZeriVLMSTTBridgeNode(Node):
         self.last_accepted_time = 0.0
         self.last_inference_request_time = 0.0
         self.wake_active_until = 0.0
-
-        self.pipeline_lock = threading.Lock()
-        self.pipeline_busy = False
-        self.waiting_for_tts = False
-        self.tts_active = False
-        self.stt_block_until = 0.0
-        self.tts_deadline = 0.0
-        self.stt_mute_state = False
-
-        self.latest_vad = False
-        self.latest_vad_time = 0.0
-        self.latest_doa_deg: Optional[float] = None
-        self.latest_doa_time = 0.0
 
         self.text_queue: queue.Queue[str] = queue.Queue(maxsize=queue_size)
         self.stop_event = threading.Event()
@@ -499,27 +463,6 @@ class ZeriVLMSTTBridgeNode(Node):
             reliable_qos,
         )
 
-        self.tts_status_sub = self.create_subscription(
-            String,
-            self.tts_status_topic,
-            self.tts_status_callback,
-            reliable_qos,
-        )
-
-        self.vad_sub = self.create_subscription(
-            Bool,
-            self.vad_topic,
-            self.vad_callback,
-            reliable_qos,
-        )
-
-        self.doa_sub = self.create_subscription(
-            Float32,
-            self.doa_topic,
-            self.doa_callback,
-            reliable_qos,
-        )
-
         self.decision_publisher = self.create_publisher(
             String,
             self.decision_topic,
@@ -550,43 +493,24 @@ class ZeriVLMSTTBridgeNode(Node):
             reliable_qos,
         )
 
-        self.stt_mute_publisher = self.create_publisher(
-            Bool,
-            self.stt_mute_topic,
-            reliable_qos,
-        )
-
-        self.pipeline_timer = self.create_timer(
-            0.2,
-            self.pipeline_timer_callback,
-        )
-
         self.get_logger().info("Zeri VLM-STT bridge node subscriptions:")
-        self.get_logger().info(f"  RGB input:       {self.rgb_topic}")
-        self.get_logger().info(f"  Depth input:     {self.depth_topic}")
-        self.get_logger().info(f"  STT input:       {self.stt_topic}")
-        self.get_logger().info(f"  TTS status:      {self.tts_status_topic}")
-        self.get_logger().info(f"  VAD input:       {self.vad_topic}")
-        self.get_logger().info(f"  DOA input:       {self.doa_topic}")
+        self.get_logger().info(f"  RGB input:    {self.rgb_topic}")
+        self.get_logger().info(f"  Depth input:  {self.depth_topic}")
+        self.get_logger().info(f"  STT input:    {self.stt_topic}")
 
         self.get_logger().info("Zeri VLM-STT bridge node publishers:")
-        self.get_logger().info(f"  Decision:        {self.decision_topic}")
-        self.get_logger().info(f"  Robot speech:    {self.robot_speech_topic}")
-        self.get_logger().info(f"  VLM RGB snap:    {self.vlm_input_rgb_topic}")
-        self.get_logger().info(f"  VLM Depth snap:  {self.vlm_input_depth_topic}")
-        self.get_logger().info(f"  VLM status:      {self.inference_status_topic}")
-        self.get_logger().info(f"  STT mute:        {self.stt_mute_topic}")
+        self.get_logger().info(f"  Decision:     {self.decision_topic}")
+        self.get_logger().info(f"  Robot speech: {self.robot_speech_topic}")
+        self.get_logger().info(f"  VLM RGB snap: {self.vlm_input_rgb_topic}")
+        self.get_logger().info(f"  VLM D snap:   {self.vlm_input_depth_topic}")
+        self.get_logger().info(f"  Status:       {self.inference_status_topic}")
 
         self.get_logger().info("STT gate settings:")
         self.get_logger().info(f"  stt_gate_mode: {self.stt_gate_mode}")
         self.get_logger().info(f"  wake_words: {self.wake_words}")
         self.get_logger().info(f"  wake_listen_window_sec: {self.wake_listen_window_sec}")
-        self.get_logger().info(f"  use_vad_gate: {self.use_vad_gate}")
-        self.get_logger().info(f"  vad_hold_sec: {self.vad_hold_sec}")
-        self.get_logger().info(f"  stt_block_after_tts_sec: {self.stt_block_after_tts_sec}")
-        self.get_logger().info(f"  tts_max_wait_sec: {self.tts_max_wait_sec}")
-
-        self.publish_stt_mute(False)
+        self.get_logger().info(f"  min_inference_interval_sec: {self.min_inference_interval_sec}")
+        self.get_logger().info(f"  duplicate_window_sec: {self.duplicate_window_sec}")
 
         self.publish_inference_status("loading_vlm_model")
         self.get_logger().info(f"Loading VLM model: {model_id}")
@@ -612,157 +536,6 @@ class ZeriVLMSTTBridgeNode(Node):
         self.inference_status_publisher.publish(msg)
         self.get_logger().info(f"[VLM STATUS] {status}")
 
-    def publish_stt_mute(self, muted: bool) -> None:
-        with self.pipeline_lock:
-            self.stt_mute_state = muted
-
-        msg = Bool()
-        msg.data = muted
-        self.stt_mute_publisher.publish(msg)
-
-        if muted:
-            self.get_logger().info("[STT MUTE] true")
-        else:
-            self.get_logger().info("[STT MUTE] false")
-
-    def begin_pipeline_block(self, reason: str) -> None:
-        with self.pipeline_lock:
-            self.pipeline_busy = True
-            self.waiting_for_tts = False
-            self.tts_active = False
-            self.tts_deadline = time.time() + self.tts_max_wait_sec
-            self.stt_block_until = 0.0
-
-        self.publish_stt_mute(True)
-        self.publish_inference_status(f"stt_blocked: {reason}")
-
-    def release_pipeline_block(self, reason: str) -> None:
-        cooldown_until = time.time() + self.stt_block_after_tts_sec
-
-        with self.pipeline_lock:
-            self.pipeline_busy = False
-            self.waiting_for_tts = False
-            self.tts_active = False
-            self.tts_deadline = 0.0
-            self.stt_block_until = cooldown_until
-
-        self.publish_inference_status(f"stt_block_cooldown: {reason}")
-
-        if self.stt_block_after_tts_sec <= 0:
-            self.publish_stt_mute(False)
-
-    def mark_waiting_for_tts(self) -> None:
-        with self.pipeline_lock:
-            self.waiting_for_tts = True
-            self.tts_deadline = time.time() + self.tts_max_wait_sec
-
-        self.publish_inference_status("waiting_for_tts")
-
-    def is_stt_input_blocked(self) -> bool:
-        now = time.time()
-
-        with self.pipeline_lock:
-            if self.pipeline_busy:
-                return True
-
-            if self.tts_active:
-                return True
-
-            if now < self.stt_block_until:
-                return True
-
-        return False
-
-    def pipeline_timer_callback(self) -> None:
-        now = time.time()
-
-        should_timeout = False
-        should_unmute = False
-
-        with self.pipeline_lock:
-            should_timeout = (
-                self.waiting_for_tts
-                and self.tts_deadline > 0.0
-                and now > self.tts_deadline
-            )
-
-            should_unmute = (
-                self.stt_mute_state
-                and not self.pipeline_busy
-                and not self.waiting_for_tts
-                and not self.tts_active
-                and self.stt_block_until > 0.0
-                and now >= self.stt_block_until
-            )
-
-        if should_timeout:
-            self.get_logger().warn("TTS wait timeout. Releasing STT block.")
-            self.release_pipeline_block("tts_timeout")
-            return
-
-        if should_unmute:
-            self.publish_stt_mute(False)
-            self.publish_inference_status("stt_unblocked_after_tts")
-
-    def tts_status_callback(self, msg: String) -> None:
-        status = msg.data.strip()
-
-        active_statuses = {
-            "queued",
-            "queued_after_drop",
-            "synthesizing",
-            "synthesizing_edge_tts",
-            "synthesizing_piper_rs",
-            "synthesizing_piper_cli",
-            "playing",
-        }
-
-        idle_statuses = {
-            "idle",
-            "played_by_piper_rs",
-        }
-
-        error_like = status.startswith("error")
-
-        if status in active_statuses:
-            with self.pipeline_lock:
-                self.tts_active = True
-                self.waiting_for_tts = True
-                self.tts_deadline = time.time() + self.tts_max_wait_sec
-
-            self.publish_inference_status(f"tts_active: {status}")
-            return
-
-        if status in idle_statuses or error_like:
-            with self.pipeline_lock:
-                was_blocking = (
-                    self.pipeline_busy
-                    or self.waiting_for_tts
-                    or self.tts_active
-                )
-
-            if was_blocking:
-                self.release_pipeline_block(f"tts_status_{status}")
-
-            return
-
-    def vad_callback(self, msg: Bool) -> None:
-        self.latest_vad = bool(msg.data)
-
-        if self.latest_vad:
-            self.latest_vad_time = time.time()
-
-    def doa_callback(self, msg: Float32) -> None:
-        self.latest_doa_deg = float(msg.data)
-        self.latest_doa_time = time.time()
-
-    def vad_allows_stt(self) -> bool:
-        if not self.use_vad_gate:
-            return True
-
-        now = time.time()
-        return (now - self.latest_vad_time) <= self.vad_hold_sec
-
     def normalize_stt_text(self, text: str) -> str:
         text = text.strip()
         text = " ".join(text.split())
@@ -784,6 +557,15 @@ class ZeriVLMSTTBridgeNode(Node):
         return cleaned.strip()
 
     def filter_stt_text_for_vlm(self, text: str) -> Optional[str]:
+        """
+        STT 텍스트를 VLM에 넘길지 결정한다.
+
+        동작:
+        - "제리 숨쉬기가 힘들어" -> "숨쉬기가 힘들어"를 VLM에 전달
+        - "제리" -> wake 상태만 켜고 VLM 추론은 하지 않음
+        - wake 상태 8초 안에 들어온 문장 -> VLM에 전달
+        - wake 없이 들어온 문장 -> 무시
+        """
         now = time.time()
         text = self.normalize_stt_text(text)
 
@@ -886,26 +668,12 @@ class ZeriVLMSTTBridgeNode(Node):
         if not raw_stt_text:
             return
 
-        if self.is_stt_input_blocked():
-            self.get_logger().info(f"Ignored STT while pipeline is busy: {raw_stt_text}")
-            self.publish_inference_status("ignored_stt_pipeline_busy")
-            return
-
-        if not self.vad_allows_stt():
-            self.get_logger().info(
-                f"Ignored STT because VAD is not active/recent: {raw_stt_text}"
-            )
-            self.publish_inference_status("ignored_stt_vad_false")
-            return
-
         self.get_logger().info(f"Received raw STT text: {raw_stt_text}")
 
         accepted_text = self.filter_stt_text_for_vlm(raw_stt_text)
 
         if accepted_text is None:
             return
-
-        self.begin_pipeline_block("accepted_stt_for_vlm")
 
         self.get_logger().info(
             f"Accepted STT text for VLM: raw='{raw_stt_text}', command='{accepted_text}'"
@@ -926,7 +694,6 @@ class ZeriVLMSTTBridgeNode(Node):
             except queue.Full:
                 self.get_logger().error("Failed to enqueue STT text.")
                 self.publish_inference_status("queue_full_error")
-                self.release_pipeline_block("queue_full_error")
 
     def get_latest_frames(
         self,
@@ -956,7 +723,6 @@ class ZeriVLMSTTBridgeNode(Node):
                 if rgb_msg is None:
                     self.get_logger().warn("No RGB frame received yet.")
                     self.publish_inference_status("waiting_for_rgb_frame")
-                    self.release_pipeline_block("no_rgb_frame")
                     continue
 
                 image = ros_image_to_pil_rgb(rgb_msg)
@@ -964,7 +730,6 @@ class ZeriVLMSTTBridgeNode(Node):
                 if image is None:
                     self.get_logger().error("Failed to convert RGB ROS image to PIL.")
                     self.publish_inference_status("rgb_conversion_error")
-                    self.release_pipeline_block("rgb_conversion_error")
                     continue
 
                 stamp = self.get_clock().now().to_msg()
@@ -987,9 +752,7 @@ class ZeriVLMSTTBridgeNode(Node):
                     self.vlm_input_depth_publisher.publish(vlm_depth_msg)
                     self.get_logger().info("Published VLM input Depth snapshot.")
                 else:
-                    self.get_logger().warn(
-                        "No depth frame received yet. Continuing with RGB only."
-                    )
+                    self.get_logger().warn("No depth frame received yet. Continuing with RGB only.")
 
                 self.publish_inference_status("running_vlm_inference")
                 self.get_logger().info("Running VLM inference...")
@@ -1016,10 +779,6 @@ class ZeriVLMSTTBridgeNode(Node):
                 if rgb_time is not None:
                     camera_age_sec = round(time.time() - rgb_time, 3)
 
-                doa_age_sec = None
-                if self.latest_doa_time > 0.0:
-                    doa_age_sec = round(time.time() - self.latest_doa_time, 3)
-
                 result = {
                     "stt_text": stt_text,
                     "need_oxygen_mask": decision.need_oxygen_mask,
@@ -1031,49 +790,36 @@ class ZeriVLMSTTBridgeNode(Node):
                     "mock_action": mock_action,
                     "latency_sec": round(elapsed, 3),
                     "camera_age_sec": camera_age_sec,
-                    "doa_deg": self.latest_doa_deg,
-                    "doa_age_sec": doa_age_sec,
-                    "latest_vad": self.latest_vad,
-                    "use_vad_gate": self.use_vad_gate,
                     "raw_vlm_output": decision.raw_text,
                     "live_rgb_topic": self.rgb_topic,
                     "live_depth_topic": self.depth_topic,
                     "vlm_input_rgb_topic": self.vlm_input_rgb_topic,
                     "vlm_input_depth_topic": self.vlm_input_depth_topic,
-                    "stt_mute_topic": self.stt_mute_topic,
-                    "tts_status_topic": self.tts_status_topic,
                 }
 
                 decision_msg = String()
                 decision_msg.data = json.dumps(result, ensure_ascii=False)
                 self.decision_publisher.publish(decision_msg)
 
-                speech_text = decision.robot_speech.strip()
-
-                if speech_text:
-                    self.mark_waiting_for_tts()
-
-                    speech_msg = String()
-                    speech_msg.data = speech_text
-                    self.robot_speech_publisher.publish(speech_msg)
-
-                    self.get_logger().info(f"Published robot speech: {speech_text}")
-                    self.get_logger().info(f"[ROBOT SPEECH] {speech_text}")
-                else:
-                    self.release_pipeline_block("no_robot_speech")
+                speech_msg = String()
+                speech_msg.data = decision.robot_speech
+                self.robot_speech_publisher.publish(speech_msg)
 
                 self.get_logger().info(f"Published VLM decision: {decision_msg.data}")
+                self.get_logger().info(f"Published robot speech: {decision.robot_speech}")
+                self.get_logger().info(f"[ROBOT SPEECH] {decision.robot_speech}")
 
                 if mock_action == "execute_oxygen_mask_delivery":
                     self.log_mock_action(decision)
                 else:
                     self.log_idle_action(decision)
 
+                self.publish_inference_status("idle")
+
             except Exception as exc:
                 err = f"error: {exc}"
                 self.get_logger().error(f"VLM worker error: {exc}")
                 self.publish_inference_status(err)
-                self.release_pipeline_block("vlm_worker_error")
 
     def log_mock_action(self, decision: VLMDecision) -> None:
         self.get_logger().info("[MOCK ACTION] Selected adapter: oxygen_mask_delivery_lora")
@@ -1095,7 +841,6 @@ class ZeriVLMSTTBridgeNode(Node):
 
         try:
             self.publish_inference_status("shutting_down")
-            self.publish_stt_mute(False)
         except Exception:
             pass
 
