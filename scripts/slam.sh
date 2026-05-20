@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-set -u
-
 # ============================================================
 # Temporary Ze-Ri Mapping / Autonomy Stack Launcher
 # - LiDAR
