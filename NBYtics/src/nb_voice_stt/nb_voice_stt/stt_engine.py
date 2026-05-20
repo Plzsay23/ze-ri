@@ -1,3 +1,6 @@
+from pathlib import Path
+
+DEFAULT_MODEL_DIR = Path(__file__).resolve().parents[3] / "models" / "sensevoice_ko"
 import os
 import re
 import numpy as np
@@ -10,7 +13,7 @@ import kaldi_native_fbank as knf
 class STTEngine:
     def __init__(
         self,
-        model_dir="/home/hansungai/NBYtics/models/sensevoice_ko",
+        model_dir=str(DEFAULT_MODEL_DIR),
         model_name="model.onnx",
         language="ko",
         device="cpu",

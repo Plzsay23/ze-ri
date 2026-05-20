@@ -1,0 +1,1037 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Ze-Ri Dashboard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Courier New', monospace;
+    background: #ffffff;
+    color: #1a1a1a;
+    min-height: 100vh;
+  }
+
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 20px;
+    background: #f5f6f8;
+    border-bottom: 1px solid #e0e3e8;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  .topbar h1 {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    color: #1a6bbd;
+    text-transform: uppercase;
+  }
+
+  .badges {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .badge {
+    font-size: 10px;
+    padding: 3px 10px;
+    border-radius: 3px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    border: 1px solid;
+  }
+
+  .badge.on   { background: #e9f7f1; border-color: #1d9e75; color: #0f6e56; }
+  .badge.off  { background: #fdecea; border-color: #e24b4a; color: #a32d2d; }
+  .badge.warn { background: #fef3e2; border-color: #ef9f27; color: #854f0b; }
+
+  .main {
+    padding: 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .section {
+    border: 1px solid #e0e3e8;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    background: #f5f6f8;
+    border-bottom: 1px solid #e0e3e8;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #6b7a8d;
+  }
+
+  .section-header .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
+
+  .section-body {
+    padding: 14px;
+    background: #ffffff;
+  }
+
+  .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: #e0e3e8; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+  .stat {
+    background: #ffffff;
+    padding: 14px 16px;
+  }
+
+  .label {
+    font-size: 10px;
+    color: #6b7a8d;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  .val {
+    font-size: 22px;
+    font-weight: 700;
+    color: #1a1a1a;
+    word-break: break-word;
+  }
+
+  .unit {
+    font-size: 11px;
+    color: #6b7a8d;
+    margin-left: 3px;
+  }
+
+  .sub {
+    font-size: 10px;
+    margin-top: 4px;
+    color: #6b7a8d;
+  }
+
+  .green { color: #1d9e75; }
+  .red   { color: #a32d2d; }
+  .blue  { color: #378add; }
+  .warn  { color: #ef9f27; }
+
+  .kv-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+
+  .kv-card {
+    border: 1px solid #e0e3e8;
+    border-radius: 6px;
+    padding: 12px;
+    background: #ffffff;
+    min-height: 102px;
+  }
+
+  .kv-title {
+    font-size: 10px;
+    color: #6b7a8d;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .kv-value {
+    font-size: 20px;
+    font-weight: 700;
+    color: #1a1a1a;
+    line-height: 1.3;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .mini {
+    margin-top: 8px;
+    font-size: 10px;
+    color: #6b7a8d;
+  }
+
+  .pipeline {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1.2fr;
+    gap: 16px;
+  }
+
+  .pipe-card {
+    border: 1px solid #e0e3e8;
+    border-radius: 6px;
+    padding: 12px;
+    background: #ffffff;
+    min-height: 150px;
+  }
+
+  .pipe-card .title {
+    font-size: 10px;
+    color: #6b7a8d;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+
+  .pipe-card .mainval {
+    font-size: 24px;
+    font-weight: 700;
+    line-height: 1.3;
+    word-break: break-word;
+    white-space: pre-wrap;
+  }
+
+  .state-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .state-item {
+    border: 1px solid #e0e3e8;
+    border-radius: 4px;
+    padding: 8px;
+    background: #f8f9fa;
+  }
+
+  .state-item .k {
+    font-size: 10px;
+    color: #6b7a8d;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+
+  .state-item .v {
+    font-size: 13px;
+    font-weight: 700;
+    color: #1a1a1a;
+    word-break: break-word;
+  }
+
+  .raw-state {
+    margin-top: 10px;
+    padding: 8px;
+    background: #f8f9fa;
+    border: 1px solid #e0e3e8;
+    border-radius: 4px;
+    font-size: 11px;
+    color: #4a6080;
+    min-height: 42px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .topic-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .topic-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .topic-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .topic-dot.on  { background: #1d9e75; box-shadow: 0 0 5px #1d9e75; }
+  .topic-dot.off { background: #a32d2d; }
+  .topic-dot.warn { background: #ef9f27; box-shadow: 0 0 5px #ef9f27; }
+
+  .topic-name {
+    width: 190px;
+    font-size: 11px;
+    color: #1a1a1a;
+    word-break: break-word;
+  }
+
+  .topic-bar {
+    flex: 1;
+    height: 4px;
+    background: #e0e3e8;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .topic-bar-fill {
+    height: 100%;
+    width: 0%;
+    background: #378add;
+    transition: width 0.25s;
+  }
+
+  .topic-hz {
+    width: 75px;
+    text-align: right;
+    font-size: 11px;
+    color: #6b7a8d;
+  }
+
+  .topic-last {
+    width: 240px;
+    font-size: 10px;
+    color: #6b7a8d;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .log {
+    background: #f8f9fa;
+    border: 1px solid #e0e3e8;
+    border-radius: 4px;
+    padding: 8px 10px;
+    height: 146px;
+    overflow: hidden;
+  }
+
+  .log-line {
+    font-size: 11px;
+    line-height: 1.8;
+    color: #4a6080;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .ts {
+    color: #9aa5b4;
+    margin-right: 8px;
+  }
+
+  .camera-card {
+    border: 1px solid #e0e3e8;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #ffffff;
+  }
+
+  .camera-head {
+    padding: 8px 10px;
+    background: #f5f6f8;
+    border-bottom: 1px solid #e0e3e8;
+    font-size: 10px;
+    color: #6b7a8d;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 700;
+  }
+
+  .camera-body {
+    position: relative;
+    background: #f8f9fa;
+    min-height: 270px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .camera-body img {
+    width: 100%;
+    height: 270px;
+    object-fit: contain;
+    display: block;
+    background: #f8f9fa;
+  }
+
+  .camera-fallback {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    color: #6b7a8d;
+    font-size: 12px;
+    background: #f8f9fa;
+    text-align: center;
+    padding: 16px;
+  }
+
+  .camera-foot {
+    padding: 10px;
+    border-top: 1px solid #e0e3e8;
+    font-size: 10px;
+    color: #6b7a8d;
+    background: #ffffff;
+  }
+
+  .scan-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+
+  .scan-box {
+    border: 1px solid #e0e3e8;
+    border-radius: 6px;
+    padding: 12px;
+    background: #ffffff;
+  }
+
+  .scan-box .t {
+    font-size: 10px;
+    color: #6b7a8d;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 8px;
+  }
+
+  .scan-box .n {
+    font-size: 22px;
+    font-weight: 700;
+    color: #1a1a1a;
+  }
+
+  .footer-note {
+    font-size: 10px;
+    color: #6b7a8d;
+    line-height: 1.6;
+  }
+
+  @media (max-width: 1200px) {
+    .grid4, .kv-grid, .scan-grid { grid-template-columns: repeat(2, 1fr); }
+    .pipeline { grid-template-columns: 1fr; }
+    .grid2, .grid3 { grid-template-columns: 1fr; }
+    .topic-row { flex-wrap: wrap; }
+    .topic-name, .topic-last { width: auto; flex: 1 1 100%; }
+  }
+
+  @media (max-width: 700px) {
+    .grid4, .kv-grid, .scan-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>⬡ Ze-Ri Dashboard</h1>
+  <div class="badges">
+    <span class="badge off" id="badge-rosbridge">rosbridge disconnected</span>
+    <span class="badge off" id="badge-lidar">lidar offline</span>
+    <span class="badge off" id="badge-camera">D435i offline</span>
+    <span class="badge off" id="badge-safe">safe cmd idle</span>
+  </div>
+</div>
+
+<div class="main">
+
+  <!-- SYSTEM STATUS -->
+  <div class="section">
+    <div class="section-header">
+      <div class="dot" style="background:#1d9e75; box-shadow:0 0 4px #1d9e75;"></div>
+      System Status
+    </div>
+    <div class="grid4">
+      <div class="stat">
+        <div class="label">ROS Bridge</div>
+        <div class="val" id="rosbridge-state">DISCONNECTED</div>
+        <div class="sub" id="rosbridge-detail">ws://10.30.12.74:9090</div>
+      </div>
+      <div class="stat">
+        <div class="label">Current Mode</div>
+        <div class="val" id="current-mode">-</div>
+        <div class="sub" id="mode-select-sub">from /mode_select</div>
+      </div>
+      <div class="stat">
+        <div class="label">Active Command</div>
+        <div class="val" id="active-command">-</div>
+        <div class="sub" id="active-command-sub">mode_state / safe_cmd</div>
+      </div>
+      <div class="stat">
+        <div class="label">Front Obstacle</div>
+        <div class="val" id="front-distance">-<span class="unit">m</span></div>
+        <div class="sub" id="front-distance-sub">awaiting /scan</div>
+      </div>
+    </div>
+  </div>
+
+  
+
+  <!-- TOPIC STATUS + LOG -->
+  <div class="section">
+    <div class="section-header">
+      <div class="dot" style="background:#1d9e75; box-shadow:0 0 4px #1d9e75;"></div>
+      Topic Status
+    </div>
+    <div class="section-body">
+      <div class="grid2">
+        <div>
+          <div class="topic-list" id="topic-list"></div>
+        </div>
+        <div>
+          <div class="label" style="margin-bottom:12px;">Event Log</div>
+          <div class="log" id="log"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CAMERA -->
+  <div class="section">
+    <div class="section-header">
+      <div class="dot" style="background:#a32d2d;"></div>
+      D435i Camera
+    </div>
+    <div class="section-body">
+      <div class="grid2">
+        <div class="camera-card">
+          <div class="camera-head">Color Stream</div>
+          <div class="camera-body">
+            <img id="color-stream" alt="D435i Color Stream" />
+            <div class="camera-fallback" id="color-fallback">
+              <div>Color stream unavailable</div>
+              <div>check web_video_server / topic path</div>
+            </div>
+          </div>
+          <div class="camera-foot" id="color-topic-foot">topic: /camera/color/image_raw</div>
+        </div>
+        <div class="camera-card">
+          <div class="camera-head">Depth Stream</div>
+          <div class="camera-body">
+            <img id="depth-stream" alt="D435i Depth Stream" />
+            <div class="camera-fallback" id="depth-fallback">
+              <div>Depth stream unavailable</div>
+              <div>check web_video_server / topic path</div>
+            </div>
+          </div>
+          <div class="camera-foot" id="depth-topic-foot">topic: /camera/depth/image_rect_raw</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- LIDAR -->
+  <div class="section">
+    <div class="section-header">
+      <div class="dot" style="background:#378add; box-shadow:0 0 4px #378add;"></div>
+      Lidar Guard
+    </div>
+    <div class="section-body">
+      <div class="scan-grid">
+        <div class="scan-box">
+          <div class="t">/scan min range</div>
+          <div class="n" id="scan-min-range">-</div>
+        </div>
+        <div class="scan-box">
+          <div class="t">front sector min</div>
+          <div class="n" id="scan-front-range">-</div>
+        </div>
+        <div class="scan-box">
+          <div class="t">hazard state</div>
+          <div class="n" id="scan-hazard-state">UNKNOWN</div>
+        </div>
+        <div class="scan-box">
+          <div class="t">points received</div>
+          <div class="n" id="scan-points">0</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer-note">
+    이 파일은 rosbridge websocket(기본 <b>ws://localhost:9090</b>)으로 토픽을 받고,
+    D435i 영상은 web_video_server(기본 <b>http://localhost:8080</b>)로 표시하도록 작성되어 있습니다.
+    아래 SETTINGS의 토픽명만 바꾸면 됩니다.
+  </div>
+</div>
+
+<script>
+/*
+  =========================
+  CONFIG
+  =========================
+  safe_cmd 타입이 String이 아니고 Twist면
+  SETTINGS.topics.safe_cmd.type 을
+  "geometry_msgs/msg/Twist" 로 바꾸면 됩니다.
+*/
+const SETTINGS = {
+  rosbridgeUrl: "ws://10.30.12.74:9090",
+  reconnectMs: 2000,
+
+  lidarStopDistance: 0.50,
+  frontWindowDeg: 25,
+
+  webVideoServerBase: "http://10.30.12.74:8080/stream?topic=",
+  camera: {
+    colorTopic: "/camera/camera/color/image_raw",
+    depthTopic: "/camera/camera/depth_viz"
+  },
+
+  topics: {
+    voice_cmd:        { name: "/voice_cmd",        type: "std_msgs/msg/String",        statusLabel: "/voice_cmd" },
+    voice_interrupt:  { name: "/voice_interrupt",  type: "std_msgs/msg/String",        statusLabel: "/voice_interrupt" },
+    auto_cmd:         { name: "/auto_cmd",         type: "std_msgs/msg/String",        statusLabel: "/auto_cmd" },
+    mode_select:      { name: "/mode_select",      type: "std_msgs/msg/String",        statusLabel: "/mode_select" },
+    mode_cmd:         { name: "/mode_cmd",         type: "std_msgs/msg/String",        statusLabel: "/mode_cmd" },
+    mode_state:       { name: "/mode_state",       type: "std_msgs/msg/String",        statusLabel: "/mode_state" },
+    safe_cmd:         { name: "/safe_cmd",         type: "std_msgs/msg/String",        statusLabel: "/safe_cmd" },
+    scan:             { name: "/scan",             type: "sensor_msgs/msg/LaserScan",  statusLabel: "/scan" }
+  }
+};
+
+const state = {
+  ws: null,
+  connected: false,
+  reconnectTimer: null,
+
+  lastSeen: {},
+  hz: {},
+  lastPreview: {},
+
+  values: {
+    voice_cmd: "-",
+    voice_interrupt: "-",
+    auto_cmd: "-",
+    mode_select: "-",
+    mode_cmd: "-",
+    mode_state: "-",
+    safe_cmd: "-",
+    state_mode: "-",
+    state_manual: "-",
+    state_auto: "-",
+    state_active: "-",
+    scan_min: null,
+    scan_front: null,
+    scan_points: 0,
+    scan_hazard: "UNKNOWN"
+  }
+};
+
+function $(id) {
+  return document.getElementById(id);
+}
+
+function nowTimeStr() {
+  const d = new Date();
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  return `${hh}:${mm}:${ss}`;
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function addLog(msg) {
+  const log = $("log");
+  const line = document.createElement("div");
+  line.className = "log-line";
+  line.innerHTML = `<span class="ts">${nowTimeStr()}</span>${escapeHtml(msg)}`;
+  log.prepend(line);
+  while (log.children.length > 8) {
+    log.removeChild(log.lastChild);
+  }
+}
+
+function setBadge(el, text, cls) {
+  el.textContent = text;
+  el.className = `badge ${cls}`;
+}
+
+function setTopicDot(rowEl, mode) {
+  const dot = rowEl.querySelector(".topic-dot");
+  dot.className = `topic-dot ${mode}`;
+}
+
+function num(v, digits = 2) {
+  if (v === null || v === undefined || Number.isNaN(v)) return "-";
+  return Number(v).toFixed(digits);
+}
+
+function truncate(str, n = 48) {
+  const s = String(str ?? "");
+  return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+
+function isFiniteRange(v, min, max) {
+  return Number.isFinite(v) && v >= min && v <= max;
+}
+
+function formatGenericMsg(msg) {
+  if (msg == null) return "-";
+
+  if (typeof msg.data === "string") return msg.data;
+  if (typeof msg.data === "number" || typeof msg.data === "boolean") return String(msg.data);
+
+  if (msg.linear && msg.angular) {
+    const lx = num(msg.linear.x ?? 0);
+    const ly = num(msg.linear.y ?? 0);
+    const az = num(msg.angular.z ?? 0);
+    return `lx:${lx} ly:${ly} az:${az}`;
+  }
+
+  if (msg.command) return String(msg.command);
+  if (msg.mode) return String(msg.mode);
+
+  try {
+    return JSON.stringify(msg);
+  } catch {
+    return String(msg);
+  }
+}
+
+function parseModeState(raw) {
+  const src = String(raw ?? "");
+  const result = {
+    mode: "-",
+    manual_cmd: "-",
+    auto_cmd: "-",
+    active_cmd: "-"
+  };
+
+  const regex = /(mode|manual_cmd|auto_cmd|active_cmd)\s*[:=]\s*([^,\n]+)/gi;
+  let m;
+  while ((m = regex.exec(src)) !== null) {
+    const key = m[1].toLowerCase();
+    const value = m[2].trim();
+    result[key] = value || "-";
+  }
+
+  return result;
+}
+
+function updateHz(key) {
+  const t = performance.now();
+  const prev = state.lastSeen[key];
+  state.lastSeen[key] = t;
+
+  if (prev) {
+    const dt = (t - prev) / 1000.0;
+    if (dt > 0) {
+      const instHz = 1 / dt;
+      const oldHz = state.hz[key] || instHz;
+      state.hz[key] = oldHz * 0.70 + instHz * 0.30;
+    }
+  } else {
+    state.hz[key] = 0;
+  }
+}
+
+function buildTopicRows() {
+  const wrap = $("topic-list");
+  wrap.innerHTML = "";
+
+  Object.entries(SETTINGS.topics).forEach(([key, cfg]) => {
+    const row = document.createElement("div");
+    row.className = "topic-row";
+    row.id = `topic-row-${key}`;
+    row.innerHTML = `
+      <div class="topic-dot off"></div>
+      <span class="topic-name">${escapeHtml(cfg.statusLabel)}</span>
+      <div class="topic-bar"><div class="topic-bar-fill" id="topic-fill-${key}"></div></div>
+      <span class="topic-hz" id="topic-hz-${key}">0.00 Hz</span>
+      <span class="topic-last" id="topic-last-${key}">no message</span>
+    `;
+    wrap.appendChild(row);
+  });
+}
+
+function refreshTopicStatus() {
+  const now = performance.now();
+
+  Object.keys(SETTINGS.topics).forEach((key) => {
+    const seen = state.lastSeen[key];
+    const hz = state.hz[key] || 0;
+    const fill = Math.min(hz / 10, 1) * 100;
+
+    $("topic-hz-" + key).textContent = `${hz.toFixed(2)} Hz`;
+    $("topic-fill-" + key).style.width = `${fill}%`;
+
+    const row = $("topic-row-" + key);
+    if (!seen) {
+      setTopicDot(row, "off");
+      return;
+    }
+
+    const ageMs = now - seen;
+    if (ageMs < 1500) setTopicDot(row, "on");
+    else if (ageMs < 5000) setTopicDot(row, "warn");
+    else setTopicDot(row, "off");
+  });
+
+  const lidarFresh = state.lastSeen.scan && (now - state.lastSeen.scan < 2000);
+  const safeFresh = state.lastSeen.safe_cmd && (now - state.lastSeen.safe_cmd < 3000);
+
+  setBadge(
+    $("badge-lidar"),
+    lidarFresh ? "lidar online" : "lidar offline",
+    lidarFresh ? "on" : "off"
+  );
+
+  const safeText = truncate(state.values.safe_cmd || "-", 16);
+  setBadge(
+    $("badge-safe"),
+    safeFresh ? `safe ${safeText}` : "safe cmd idle",
+    safeFresh ? "warn" : "off"
+  );
+}
+
+function updateCoreUI() {
+  $("rosbridge-state").textContent = state.connected ? "CONNECTED" : "DISCONNECTED";
+  $("rosbridge-detail").textContent = SETTINGS.rosbridgeUrl;
+
+  $("voice-cmd-val").textContent = state.values.voice_cmd;
+  $("voice-interrupt-val").textContent = state.values.voice_interrupt;
+  $("auto-cmd-val").textContent = state.values.auto_cmd;
+  $("mode-select-val").textContent = state.values.mode_select;
+
+  $("mode-cmd-val").textContent = state.values.mode_cmd;
+  $("safe-cmd-val").textContent = state.values.safe_cmd;
+  $("mode-state-raw").textContent = state.values.mode_state;
+
+  $("current-mode").textContent = state.values.state_mode !== "-" ? state.values.state_mode : state.values.mode_select;
+  $("active-command").textContent = state.values.state_active !== "-" ? state.values.state_active : state.values.safe_cmd;
+
+  $("state-mode").textContent = state.values.state_mode;
+  $("state-manual").textContent = state.values.state_manual;
+  $("state-auto").textContent = state.values.state_auto;
+  $("state-active").textContent = state.values.state_active;
+
+  const frontText = state.values.scan_front == null ? "-" : num(state.values.scan_front, 2);
+  $("front-distance").innerHTML = `${frontText}<span class="unit">m</span>`;
+  $("front-distance-sub").textContent =
+    state.values.scan_front == null
+      ? "awaiting /scan"
+      : (state.values.scan_front <= SETTINGS.lidarStopDistance ? "hazard detected" : "path clear");
+
+  $("scan-min-range").textContent = state.values.scan_min == null ? "-" : `${num(state.values.scan_min, 2)} m`;
+  $("scan-front-range").textContent = state.values.scan_front == null ? "-" : `${num(state.values.scan_front, 2)} m`;
+  $("scan-hazard-state").textContent = state.values.scan_hazard;
+  $("scan-points").textContent = String(state.values.scan_points);
+
+  if (state.connected) setBadge($("badge-rosbridge"), "rosbridge connected", "on");
+  else setBadge($("badge-rosbridge"), "rosbridge disconnected", "off");
+}
+
+function setTopicPreview(key, text) {
+  state.lastPreview[key] = text;
+  const el = $("topic-last-" + key);
+  if (el) el.textContent = truncate(text, 60);
+}
+
+function handleStringLikeTopic(key, msg) {
+  const text = formatGenericMsg(msg);
+  state.values[key] = text;
+  setTopicPreview(key, text);
+
+  if (["voice_cmd", "voice_interrupt", "auto_cmd", "mode_select", "mode_cmd", "safe_cmd"].includes(key)) {
+    addLog(`${SETTINGS.topics[key].name} → ${text}`);
+  }
+
+  if (key === "mode_state") {
+    const parsed = parseModeState(text);
+    state.values.state_mode = parsed.mode;
+    state.values.state_manual = parsed.manual_cmd;
+    state.values.state_auto = parsed.auto_cmd;
+    state.values.state_active = parsed.active_cmd;
+    addLog(`/mode_state → ${truncate(text, 80)}`);
+  }
+}
+
+function handleScan(msg) {
+  const ranges = Array.isArray(msg.ranges) ? msg.ranges : [];
+  const angleMin = Number(msg.angle_min ?? 0);
+  const angleInc = Number(msg.angle_increment ?? 0);
+  const rangeMin = Number(msg.range_min ?? 0);
+  const rangeMax = Number(msg.range_max ?? Number.POSITIVE_INFINITY);
+
+  let globalMin = Number.POSITIVE_INFINITY;
+  let frontMin = Number.POSITIVE_INFINITY;
+  let validCount = 0;
+
+  const frontRad = SETTINGS.frontWindowDeg * Math.PI / 180.0;
+
+  for (let i = 0; i < ranges.length; i++) {
+    const r = ranges[i];
+    if (!isFiniteRange(r, rangeMin, rangeMax)) continue;
+
+    validCount++;
+    if (r < globalMin) globalMin = r;
+
+    const angle = angleMin + i * angleInc;
+    if (Math.abs(angle) <= frontRad && r < frontMin) {
+      frontMin = r;
+    }
+  }
+
+  state.values.scan_min = Number.isFinite(globalMin) ? globalMin : null;
+  state.values.scan_front = Number.isFinite(frontMin) ? frontMin : null;
+  state.values.scan_points = validCount;
+  state.values.scan_hazard =
+    state.values.scan_front != null && state.values.scan_front <= SETTINGS.lidarStopDistance
+      ? "STOP"
+      : "CLEAR";
+
+  const preview = state.values.scan_front == null
+    ? "scan received"
+    : `front:${num(state.values.scan_front, 2)}m min:${num(state.values.scan_min, 2)}m`;
+
+  setTopicPreview("scan", preview);
+}
+
+function subscribeTopic(cfg) {
+  if (!state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+
+  state.ws.send(JSON.stringify({
+    op: "subscribe",
+    topic: cfg.name,
+    type: cfg.type,
+    throttle_rate: 0,
+    queue_length: 1
+  }));
+}
+
+function connectRosbridge() {
+  clearTimeout(state.reconnectTimer);
+
+  try {
+    state.ws = new WebSocket(SETTINGS.rosbridgeUrl);
+  } catch (err) {
+    addLog(`rosbridge connection failed: ${err.message}`);
+    scheduleReconnect();
+    return;
+  }
+
+  state.ws.onopen = () => {
+    state.connected = true;
+    updateCoreUI();
+    addLog(`connected to ${SETTINGS.rosbridgeUrl}`);
+
+    Object.values(SETTINGS.topics).forEach(subscribeTopic);
+  };
+
+  state.ws.onclose = () => {
+    state.connected = false;
+    updateCoreUI();
+    addLog(`rosbridge disconnected`);
+    scheduleReconnect();
+  };
+
+  state.ws.onerror = () => {
+    // onclose에서 재연결 처리
+  };
+
+  state.ws.onmessage = (event) => {
+    let packet;
+    try {
+      packet = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+
+    if (!packet.topic || !packet.msg) return;
+
+    const key = Object.keys(SETTINGS.topics).find(
+      k => SETTINGS.topics[k].name === packet.topic
+    );
+    if (!key) return;
+
+    updateHz(key);
+
+    if (key === "scan") handleScan(packet.msg);
+    else handleStringLikeTopic(key, packet.msg);
+
+    updateCoreUI();
+  };
+}
+
+function scheduleReconnect() {
+  clearTimeout(state.reconnectTimer);
+  state.reconnectTimer = setTimeout(connectRosbridge, SETTINGS.reconnectMs);
+}
+
+function setupCameraStreams() {
+  const colorImg = $("color-stream");
+  const depthImg = $("depth-stream");
+
+  const colorFallback = $("color-fallback");
+  const depthFallback = $("depth-fallback");
+
+  const colorUrl = `${SETTINGS.webVideoServerBase}${SETTINGS.camera.colorTopic}`;
+  const depthUrl = `${SETTINGS.webVideoServerBase}${SETTINGS.camera.depthTopic}`;
+
+  $("color-topic-foot").textContent = `topic: ${SETTINGS.camera.colorTopic}`;
+  $("depth-topic-foot").textContent = `topic: ${SETTINGS.camera.depthTopic}`;
+
+  colorImg.onload = () => {
+    colorFallback.style.display = "none";
+    updateCameraBadge();
+  };
+  colorImg.onerror = () => {
+    colorFallback.style.display = "flex";
+    updateCameraBadge();
+  };
+
+  depthImg.onload = () => {
+    depthFallback.style.display = "none";
+    updateCameraBadge();
+  };
+  depthImg.onerror = () => {
+    depthFallback.style.display = "flex";
+    updateCameraBadge();
+  };
+
+  colorImg.src = colorUrl;
+  depthImg.src = depthUrl;
+}
+
+function updateCameraBadge() {
+  const colorOk = $("color-fallback").style.display === "none";
+  const depthOk = $("depth-fallback").style.display === "none";
+  const ok = colorOk || depthOk;
+
+  setBadge(
+    $("badge-camera"),
+    ok ? "D435i online" : "D435i offline",
+    ok ? "on" : "off"
+  );
+}
+
+function periodicRefresh() {
+  refreshTopicStatus();
+  updateCoreUI();
+}
+
+function init() {
+  buildTopicRows();
+  setupCameraStreams();
+  connectRosbridge();
+  updateCoreUI();
+  setInterval(periodicRefresh, 500);
+  addLog("dashboard initialized");
+}
+
+window.addEventListener("load", init);
+</script>
+</body>
+</html>

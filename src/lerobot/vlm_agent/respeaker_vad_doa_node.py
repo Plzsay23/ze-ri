@@ -15,6 +15,10 @@ import usb.util
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, Float32, String
+from pathlib import Path
+
+ZERI_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_TUNING_PY = ZERI_ROOT / "tools" / "usb_4_mic_array" / "tuning.py"
 
 
 def make_reliable_qos(depth: int = 10) -> QoSProfile:
@@ -93,7 +97,7 @@ class ReSpeakerVadDoaNode(Node):
 
         self.declare_parameter(
             "tuning_py_path",
-            "/home/hansungai/tools/usb_4_mic_array/tuning.py",
+            str(DEFAULT_TUNING_PY),
         )
 
         self.declare_parameter("vendor_id", "0x2886")

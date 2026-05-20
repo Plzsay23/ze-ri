@@ -1,3 +1,6 @@
+from pathlib import Path
+
+DEFAULT_MODEL_DIR = Path(__file__).resolve().parents[3] / "models" / "sensevoice_ko"
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
@@ -15,7 +18,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             "model_dir",
-            default_value="/home/hansungai/NBYtics/models/sensevoice_ko",
+            default_value=str(DEFAULT_MODEL_DIR),
         ),
         DeclareLaunchArgument(
             "audio_device",
