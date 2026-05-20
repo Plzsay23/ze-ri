@@ -1,0 +1,72 @@
+# Ze-Ri XVLA Runtime / Training Environment
+# Target:
+#   Jetson AGX Thor
+#   Ubuntu 24.04 / ROS2 Jazzy
+#   Python 3.12
+#   CUDA 13.0
+#
+# Install torch separately:
+#   uv pip install torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0 --index-url https://download.pytorch.org/whl/cu130
+#
+# Then install this file:
+#   uv pip install -r requirements/zeri_xvla_thor_runtime.txt
+#
+# Local editable package:
+-e .
+
+# LeRobot / VLA common
+rerun-sdk
+transformers
+accelerate
+peft
+pillow
+qwen-vl-utils
+num2words
+
+# Dataset / video / numerical stack
+numpy>=2.0.0,<2.3.0
+fsspec[http]>=2023.1.0,<=2026.2.0
+pandas>=2.2.3
+pyarrow
+datasets
+huggingface-hub
+safetensors
+tokenizers
+av
+opencv-python
+
+# Dashboard / web
+fastapi
+uvicorn[standard]
+websockets
+
+# STT / audio / serial
+sounddevice
+soundfile
+pyserial
+onnxruntime
+sentencepiece
+scipy
+pyyaml
+kaldi-native-fbank
+
+# ReSpeaker / USB
+pyusb
+
+# TTS
+edge-tts
+
+# Build helpers
+setuptools>=75,<80
+wheel
+build
+ninja
+packaging
+psutil
+
+# ROS2 Python build helpers inside uv venv
+colcon-common-extensions
+colcon-core
+colcon-ros
+colcon-cmake
+colcon-python-setup-py
