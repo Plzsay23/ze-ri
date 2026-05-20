@@ -20,6 +20,7 @@ Requires: pip install 'lerobot[training]'  (includes dataset + accelerate + wand
 
 import dataclasses
 import logging
+import os
 import time
 from contextlib import nullcontext
 from pprint import pformat
@@ -61,6 +62,55 @@ from lerobot.utils.utils import (
 from .lerobot_eval import eval_policy_all
 
 from lerobot.policies.camera_key_utils import convert_uint8_images_to_float, get_dataset_camera_keys
+
+
+def _is_depth_camera_key(key: str) -> bool:
+    key_l = key.lower()
+    return (
+        key_l.endswith("_depth")
+        or ".depth" in key_l
+        or key_l.endswith(".depth")
+    )
+
+
+def _split_rgb_depth_camera_keys(camera_keys: list[str]) -> tuple[list[str], list[str]]:
+    depth_keys = [key for key in camera_keys if _is_depth_camera_key(key)]
+    rgb_keys = [key for key in camera_keys if key not in depth_keys]
+    return rgb_keys, depth_keys
+
+
+def _apply_rgb_dropout_when_depth_exists(
+    batch: dict[str, Any],
+    rgb_keys: list[str],
+    depth_keys: list[str],
+    p: float,
+) -> dict[str, Any]:
+    """Randomly zero RGB visual streams so the policy cannot ignore depth.
+
+    Default p should be 0.0 unless explicitly enabled by env var.
+    """
+    if p <= 0.0 or not rgb_keys or not depth_keys:
+        return batch
+
+    ref_tensor = None
+    for key in rgb_keys + depth_keys:
+        value = batch.get(key)
+        if torch.is_tensor(value):
+            ref_tensor = value
+            break
+
+    if ref_tensor is None:
+        return batch
+
+    if torch.rand((), device=ref_tensor.device).item() >= p:
+        return batch
+
+    for key in rgb_keys:
+        value = batch.get(key)
+        if torch.is_tensor(value):
+            batch[key] = torch.zeros_like(value)
+
+    return batch
 
 
 def update_policy(
@@ -256,9 +306,21 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
     )
 
     dataset_camera_keys = get_dataset_camera_keys(dataset.meta)
+    rgb_camera_keys, depth_camera_keys = _split_rgb_depth_camera_keys(dataset_camera_keys)
+    depth_rgb_dropout_p = float(os.environ.get("LEROBOT_DEPTH_RGB_DROPOUT_P", "0.0"))
+
     if is_main_process:
         logging.info("Dataset camera keys: %s", dataset_camera_keys)
+        logging.info("Dataset RGB camera keys: %s", rgb_camera_keys)
+        logging.info("Dataset depth camera keys: %s", depth_camera_keys)
         logging.info("Policy image features after sync: %s", list(policy.config.image_features.keys()))
+        logging.info("LEROBOT_DEPTH_RGB_DROPOUT_P=%.3f", depth_rgb_dropout_p)
+
+        if not depth_camera_keys:
+            logging.warning(
+                "No depth camera keys found. Expected keys like "
+                "'observation.images.<camera>_depth' if depth training is intended."
+            )
 
     if cfg.peft is not None:
         logging.info("Using PEFT! Wrapping model.")
@@ -442,6 +504,12 @@ def train(cfg: TrainPipelineConfig, accelerator: "Accelerator | None" = None):
         start_time = time.perf_counter()
         batch = next(dl_iter)
         batch = convert_uint8_images_to_float(batch, dataset_camera_keys)
+        batch = _apply_rgb_dropout_when_depth_exists(
+            batch=batch,
+            rgb_keys=rgb_camera_keys,
+            depth_keys=depth_camera_keys,
+            p=depth_rgb_dropout_p,
+        )
         batch = preprocessor(batch)
         train_tracker.dataloading_s = time.perf_counter() - start_time
 

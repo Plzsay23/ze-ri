@@ -66,11 +66,34 @@ class SOFollower(Robot):
     def _motors_ft(self) -> dict[str, type]:
         return {f"{motor}.pos": float for motor in self.bus.motors}
 
+    @staticmethod
+    def _depth_key(cam_key: str, cam_cfg) -> str:
+        return f"{cam_key}{getattr(cam_cfg, 'depth_suffix', '_depth')}"
+
+    @staticmethod
+    def _camera_has_depth_image(cam_cfg) -> bool:
+        return bool(
+            getattr(cam_cfg, "use_depth", False)
+            and getattr(cam_cfg, "depth_as_image", False)
+        )
+
     @property
     def _cameras_ft(self) -> dict[str, tuple]:
-        return {
-            cam: (self.config.cameras[cam].height, self.config.cameras[cam].width, 3) for cam in self.cameras
-        }
+        camera_features: dict[str, tuple] = {}
+
+        for cam_key in self.cameras:
+            cam_cfg = self.config.cameras[cam_key]
+
+            camera_features[cam_key] = (cam_cfg.height, cam_cfg.width, 3)
+
+            if self._camera_has_depth_image(cam_cfg):
+                camera_features[self._depth_key(cam_key, cam_cfg)] = (
+                    cam_cfg.height,
+                    cam_cfg.width,
+                    3,
+                )
+
+        return camera_features
 
     @cached_property
     def observation_features(self) -> dict[str, type | tuple]:
@@ -185,10 +208,27 @@ class SOFollower(Robot):
 
         # Capture images from cameras
         for cam_key, cam in self.cameras.items():
+            cam_cfg = self.config.cameras[cam_key]
+
             start = time.perf_counter()
             obs_dict[cam_key] = cam.read_latest()
             dt_ms = (time.perf_counter() - start) * 1e3
             logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
+
+            if self._camera_has_depth_image(cam_cfg):
+                depth_key = self._depth_key(cam_key, cam_cfg)
+
+                if not hasattr(cam, "read_latest_depth_image"):
+                    raise RuntimeError(
+                        f"Camera {cam_key!r} is configured with use_depth=True and "
+                        f"depth_as_image=True, but {type(cam).__name__} does not implement "
+                        "`read_latest_depth_image()`."
+                    )
+
+                start = time.perf_counter()
+                obs_dict[depth_key] = cam.read_latest_depth_image()
+                dt_ms = (time.perf_counter() - start) * 1e3
+                logger.debug(f"{self} read {depth_key}: {dt_ms:.1f}ms")
 
         return obs_dict
 

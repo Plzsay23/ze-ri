@@ -47,8 +47,66 @@ class PolicyServerConfig:
     """Configuration for PolicyServer.
 
     This class defines all configurable parameters for the PolicyServer,
-    including networking settings and action chunking specifications.
+    including networking settings, action chunking, and optional base+adapter loading.
     """
+
+    # ------------------------------------------------------------------
+    # Optional server-side policy loading
+    # ------------------------------------------------------------------
+    # If these are left empty, the server keeps the original behavior:
+    # it waits for RobotClient to send RemotePolicyConfig and loads
+    # policy_specs.pretrained_name_or_path.
+    policy_type: str | None = field(
+        default=None,
+        metadata={"help": "Optional server-side policy type override, e.g. xvla, act, groot."},
+    )
+
+    base_model_path: str | None = field(
+        default=None,
+        metadata={
+            "help": (
+                "Optional base policy path/repo. "
+                "If provided without adapter_paths, server loads this base model only. "
+                "If provided with adapter_paths, server loads base+LoRA adapter slots."
+            )
+        },
+    )
+
+    adapter_paths: list[str] = field(
+        default_factory=list,
+        metadata={"help": "Optional list of PEFT/LoRA adapter paths or repos."},
+    )
+
+    adapter_ids: list[str] = field(
+        default_factory=list,
+        metadata={
+            "help": (
+                "Optional policy_id list for adapter_paths. "
+                "If omitted, ids are derived from adapter directory/repo names."
+            )
+        },
+    )
+
+    default_policy_id: str | None = field(
+        default=None,
+        metadata={
+            "help": (
+                "Default loaded policy_id. "
+                "If omitted, first adapter id is used. "
+                "For base-only mode, __base__ is used."
+            )
+        },
+    )
+
+    policy_manifest: str | None = field(
+        default=None,
+        metadata={
+            "help": (
+                "Optional path to a policy manifest JSON. "
+                "This replaces LEROBOT_POLICY_MANIFEST when provided."
+            )
+        },
+    )
 
     # Networking configuration
     host: str = field(default="localhost", metadata={"help": "Host address to bind the server to"})
@@ -77,6 +135,24 @@ class PolicyServerConfig:
 
         if self.obs_queue_timeout < 0:
             raise ValueError(f"obs_queue_timeout must be non-negative, got {self.obs_queue_timeout}")
+
+        if self.adapter_paths and not self.base_model_path:
+            raise ValueError(
+                "`adapter_paths` requires `base_model_path`. "
+                "Use --base_model_path=<base policy> together with --adapter_paths=[...]"
+            )
+
+        if self.adapter_ids and len(self.adapter_ids) != len(self.adapter_paths):
+            raise ValueError(
+                "`adapter_ids` length must match `adapter_paths` length. "
+                f"Got adapter_ids={len(self.adapter_ids)}, adapter_paths={len(self.adapter_paths)}"
+            )
+
+        if self.default_policy_id and not self.base_model_path and not self.policy_manifest:
+            raise ValueError(
+                "`default_policy_id` is only meaningful with `base_model_path`, "
+                "`adapter_paths`, or `policy_manifest`."
+            )
 
     @classmethod
     def from_dict(cls, config_dict: dict) -> "PolicyServerConfig":

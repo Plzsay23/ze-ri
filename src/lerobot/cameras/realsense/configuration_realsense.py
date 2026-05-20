@@ -56,8 +56,18 @@ class RealSenseCameraConfig(CameraConfig):
     serial_number_or_name: str
     color_mode: ColorMode = ColorMode.RGB
     use_depth: bool = False
+
+    # If True, expose depth as an additional uint8 HWC visual stream.
+    # Example:
+    #   camera key "intel" -> raw observation key "intel_depth"
+    #   dataset key -> "observation.images.intel_depth"
+    depth_as_image: bool = True
+    depth_min_m: float = 0.15
+    depth_max_m: float = 2.50
+    depth_suffix: str = "_depth"
+
     rotation: Cv2Rotation = Cv2Rotation.NO_ROTATION
-    warmup_s: int = 1
+    warmup_s: int = 5
 
     def __post_init__(self) -> None:
         self.color_mode = ColorMode(self.color_mode)
@@ -68,3 +78,15 @@ class RealSenseCameraConfig(CameraConfig):
             raise ValueError(
                 "For `fps`, `width` and `height`, either all of them need to be set, or none of them."
             )
+
+        if self.depth_min_m < 0:
+            raise ValueError(f"`depth_min_m` must be >= 0, got {self.depth_min_m}")
+
+        if self.depth_max_m <= self.depth_min_m:
+            raise ValueError(
+                f"`depth_max_m` must be > `depth_min_m`, "
+                f"got depth_min_m={self.depth_min_m}, depth_max_m={self.depth_max_m}"
+            )
+
+        if not self.depth_suffix:
+            raise ValueError("`depth_suffix` must be a non-empty string.")

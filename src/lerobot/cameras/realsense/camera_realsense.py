@@ -129,6 +129,11 @@ class RealSenseCamera(Camera):
         self.fps = config.fps
         self.color_mode = config.color_mode
         self.use_depth = config.use_depth
+        self.depth_as_image = config.depth_as_image
+        self.depth_min_m = config.depth_min_m
+        self.depth_max_m = config.depth_max_m
+        self.depth_suffix = config.depth_suffix
+        self.depth_scale = 0.001  # fallback, RealSense usually reports meters per raw unit
         self.warmup_s = config.warmup_s
 
         self.rs_pipeline: rs.pipeline | None = None
@@ -309,6 +314,16 @@ class RealSenseCamera(Camera):
             raise RuntimeError(f"{self}: rs_profile must be initialized before use.")
 
         stream = self.rs_profile.get_stream(rs.stream.color).as_video_stream_profile()
+        if self.use_depth:
+            try:
+                depth_sensor = self.rs_profile.get_device().first_depth_sensor()
+                self.depth_scale = float(depth_sensor.get_depth_scale())
+                logger.info(f"{self} depth_scale={self.depth_scale}")
+            except Exception as e:
+                logger.warning(
+                    f"{self} failed to read RealSense depth scale. "
+                    f"Using fallback depth_scale={self.depth_scale}. Error: {e}"
+                )        
 
         if self.fps is None:
             self.fps = stream.fps()
@@ -363,6 +378,32 @@ class RealSenseCamera(Camera):
             raise RuntimeError("No depth frame available. Ensure camera is streaming.")
 
         return depth_map
+
+    def _depth_to_uint8_image(self, depth_frame: NDArray[Any]) -> NDArray[Any]:
+        """
+        Convert raw RealSense depth frame to HWC uint8 3-channel pseudo-image.
+
+        Output:
+            np.ndarray, shape=(H, W, 3), dtype=np.uint8
+
+        Near pixels are brighter. Invalid depth is black.
+        """
+        if depth_frame.ndim != 2:
+            raise RuntimeError(f"{self} depth frame must be 2D, got shape={depth_frame.shape}")
+
+        depth_m = depth_frame.astype(np.float32) * float(self.depth_scale)
+
+        valid = depth_m > 0.0
+        clipped = np.clip(depth_m, self.depth_min_m, self.depth_max_m)
+
+        denom = max(self.depth_max_m - self.depth_min_m, 1e-6)
+
+        # near -> 1.0, far -> 0.0
+        normalized = 1.0 - ((clipped - self.depth_min_m) / denom)
+        normalized[~valid] = 0.0
+
+        depth_u8 = (normalized * 255.0).clip(0, 255).astype(np.uint8)
+        return np.repeat(depth_u8[..., None], 3, axis=-1)
 
     def _read_from_hardware(self):
         if self.rs_pipeline is None:
@@ -452,7 +493,7 @@ class RealSenseCamera(Camera):
             )
 
         processed_image = image
-        if self.color_mode == ColorMode.BGR:
+        if not depth_frame and self.color_mode == ColorMode.BGR:
             processed_image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
         if self.rotation in [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE, cv2.ROTATE_180]:
@@ -574,6 +615,41 @@ class RealSenseCamera(Camera):
             raise RuntimeError(f"Internal error: Event set but no frame available for {self}.")
 
         return frame
+
+    @check_if_not_connected
+    def read_latest_depth(self, max_age_ms: int = 500) -> NDArray[Any]:
+        """Return the most recent raw depth frame captured immediately.
+
+        Returns:
+            np.ndarray: Raw depth frame, shape=(H, W), dtype usually uint16.
+        """
+        if not self.use_depth:
+            raise RuntimeError(f"Depth stream is not enabled for {self}.")
+
+        if self.thread is None or not self.thread.is_alive():
+            raise RuntimeError(f"{self} read thread is not running.")
+
+        with self.frame_lock:
+            frame = self.latest_depth_frame
+            timestamp = self.latest_timestamp
+
+        if frame is None or timestamp is None:
+            raise RuntimeError(f"{self} has not captured any depth frames yet.")
+
+        age_ms = (time.perf_counter() - timestamp) * 1e3
+        if age_ms > max_age_ms:
+            raise TimeoutError(
+                f"{self} latest depth frame is too old: {age_ms:.1f} ms "
+                f"(max allowed: {max_age_ms} ms)."
+            )
+
+        return frame
+
+    @check_if_not_connected
+    def read_latest_depth_image(self, max_age_ms: int = 500) -> NDArray[Any]:
+        """Return the latest depth frame as HWC uint8 3-channel visual image."""
+        depth_frame = self.read_latest_depth(max_age_ms=max_age_ms)
+        return self._depth_to_uint8_image(depth_frame)
 
     # NOTE(Steven): Missing implementation for depth for now
     @check_if_not_connected

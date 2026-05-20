@@ -30,6 +30,7 @@ import os
 import pickle  # nosec
 import threading
 import time
+from pathlib import Path
 from concurrent import futures
 from dataclasses import asdict, dataclass
 from pprint import pformat
@@ -73,6 +74,11 @@ class LoadedPolicySlot:
     policy: Any
     preprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]]
     postprocessor: PolicyProcessorPipeline[PolicyAction, PolicyAction]
+
+    # Optional PEFT/LoRA metadata.
+    base_model_path: str | None = None
+    adapter_path: str | None = None
+    adapter_name: str | None = None
 
 
 class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
@@ -135,17 +141,94 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
         return services_pb2.Empty()
 
-    def _read_policy_manifest(self) -> dict[str, Any] | None:
-        """Read multi-policy manifest from LEROBOT_POLICY_MANIFEST.
+    def _derive_adapter_id(self, adapter_path: str, index: int) -> str:
+        """Derive a stable adapter policy_id from path/repo name."""
+        name = Path(str(adapter_path).rstrip("/")).name
+        if not name:
+            name = f"adapter_{index}"
+        return name.replace(" ", "_")
 
-        If env is not set, server behaves exactly like the original single-policy server.
+    def _build_cli_policy_manifest(self, policy_specs: RemotePolicyConfig) -> dict[str, Any] | None:
+        """Build a policy manifest from PolicyServerConfig CLI args.
+
+        Cases:
+          1. No base_model_path -> None, keep original client-driven behavior.
+          2. base_model_path only -> one base-only policy slot.
+          3. base_model_path + adapter_paths -> one slot per adapter.
         """
-        manifest_path = os.environ.get("LEROBOT_POLICY_MANIFEST", "").strip()
+        if not self.config.base_model_path:
+            return None
+
+        policy_type = self.config.policy_type or policy_specs.policy_type
+        base_model_path = self.config.base_model_path
+
+        policies: list[dict[str, Any]] = []
+
+        if not self.config.adapter_paths:
+            policies.append(
+                {
+                    "id": "__base__",
+                    "policy_type": policy_type,
+                    "pretrained_name_or_path": base_model_path,
+                    "base_model_path": base_model_path,
+                    "adapter_path": None,
+                }
+            )
+
+            return {
+                "default_policy_id": self.config.default_policy_id or "__base__",
+                "policies": policies,
+            }
+
+        adapter_ids = list(self.config.adapter_ids)
+        if not adapter_ids:
+            adapter_ids = [
+                self._derive_adapter_id(adapter_path, i)
+                for i, adapter_path in enumerate(self.config.adapter_paths)
+            ]
+
+        for policy_id, adapter_path in zip(adapter_ids, self.config.adapter_paths, strict=True):
+            policies.append(
+                {
+                    "id": policy_id,
+                    "policy_type": policy_type,
+                    "pretrained_name_or_path": base_model_path,
+                    "base_model_path": base_model_path,
+                    "adapter_path": adapter_path,
+                    "adapter_name": policy_id,
+                }
+            )
+
+        default_policy_id = self.config.default_policy_id or policies[0]["id"]
+
+        return {
+            "default_policy_id": default_policy_id,
+            "policies": policies,
+        }
+
+    def _read_policy_manifest(self, policy_specs: RemotePolicyConfig | None = None) -> dict[str, Any] | None:
+        """Read policy manifest from CLI arg, env var, or synthesize one from base+adapter CLI args.
+
+        Priority:
+          1. --base_model_path / --adapter_paths CLI
+          2. --policy_manifest CLI
+          3. LEROBOT_POLICY_MANIFEST env
+          4. None -> original single-policy behavior
+        """
+        if policy_specs is not None:
+            cli_manifest = self._build_cli_policy_manifest(policy_specs)
+            if cli_manifest is not None:
+                return cli_manifest
+
+        manifest_path = (self.config.policy_manifest or "").strip()
+        if not manifest_path:
+            manifest_path = os.environ.get("LEROBOT_POLICY_MANIFEST", "").strip()
+
         if not manifest_path:
             return None
 
         if not os.path.exists(manifest_path):
-            raise FileNotFoundError(f"LEROBOT_POLICY_MANIFEST does not exist: {manifest_path}")
+            raise FileNotFoundError(f"Policy manifest does not exist: {manifest_path}")
 
         with open(manifest_path, "r", encoding="utf-8") as f:
             manifest = json.load(f)
@@ -158,6 +241,56 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
         return manifest
 
+    def _make_pre_post_processors_with_fallback(
+        self,
+        *,
+        policy_config: Any,
+        primary_pretrained_path: str,
+        fallback_pretrained_path: str | None,
+        device: str,
+        rename_map: dict[str, str] | None,
+    ) -> tuple[
+        PolicyProcessorPipeline[dict[str, Any], dict[str, Any]],
+        PolicyProcessorPipeline[PolicyAction, PolicyAction],
+    ]:
+        """Load processors from adapter path first, then fall back to base path.
+
+        Adapter repos may or may not contain preprocessor/postprocessor JSON files.
+        If the adapter path does not contain them, the base model path is used.
+        """
+        device_override = {"device": device}
+        preprocessor_overrides = {
+            "device_processor": device_override,
+            "rename_observations_processor": {"rename_map": rename_map or {}},
+        }
+        postprocessor_overrides = {"device_processor": device_override}
+
+        try:
+            return make_pre_post_processors(
+                policy_config,
+                pretrained_path=primary_pretrained_path,
+                preprocessor_overrides=preprocessor_overrides,
+                postprocessor_overrides=postprocessor_overrides,
+            )
+        except Exception as e:
+            if not fallback_pretrained_path or fallback_pretrained_path == primary_pretrained_path:
+                raise
+
+            self.logger.warning(
+                "[adapter] Failed to load processors from %s. "
+                "Falling back to base path %s. Error: %s",
+                primary_pretrained_path,
+                fallback_pretrained_path,
+                e,
+            )
+
+            return make_pre_post_processors(
+                policy_config,
+                pretrained_path=fallback_pretrained_path,
+                preprocessor_overrides=preprocessor_overrides,
+                postprocessor_overrides=postprocessor_overrides,
+            )
+
     def _load_policy_slot(
         self,
         *,
@@ -167,39 +300,85 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         device: str,
         actions_per_chunk: int,
         rename_map: dict[str, str] | None,
+        base_model_path: str | None = None,
+        adapter_path: str | None = None,
+        adapter_name: str | None = None,
     ) -> LoadedPolicySlot:
-        """Load one policy and its processors to GPU/target device."""
+        """Load one policy slot to GPU/target device.
+
+        Modes:
+          - Full policy mode:
+              pretrained_name_or_path points to a complete policy checkpoint.
+          - Base-only mode:
+              base_model_path is provided, adapter_path is None.
+          - Base+LoRA mode:
+              base_model_path is provided, adapter_path points to a PEFT adapter.
+        """
         if policy_type not in SUPPORTED_POLICIES:
             raise ValueError(
                 f"Policy type {policy_type} not supported. Supported policies: {SUPPORTED_POLICIES}"
             )
 
+        effective_base_path = base_model_path or pretrained_name_or_path
+        effective_adapter_name = adapter_name or policy_id
+
         self.logger.info(
-            f"[multi-policy] Loading policy_id={policy_id} | "
-            f"type={policy_type} | path={pretrained_name_or_path} | device={device}"
+            f"[policy-load] Loading policy_id={policy_id} | "
+            f"type={policy_type} | base={effective_base_path} | "
+            f"adapter={adapter_path} | device={device}"
         )
 
         policy_class = get_policy_class(policy_type)
 
         start = time.perf_counter()
-        policy = policy_class.from_pretrained(pretrained_name_or_path)
+
+        # 1. Load base or complete policy.
+        policy = policy_class.from_pretrained(effective_base_path)
+
+        # 2. Optionally attach PEFT/LoRA adapter.
+        if adapter_path:
+            try:
+                from peft import PeftModel
+            except Exception as e:
+                raise ImportError(
+                    "Adapter path was provided, but `peft` is not installed. "
+                    "Install PEFT first, e.g. `uv pip install peft`."
+                ) from e
+
+            self.logger.info(
+                f"[adapter] Attaching adapter policy_id={policy_id} | "
+                f"adapter_name={effective_adapter_name} | path={adapter_path}"
+            )
+
+            policy = PeftModel.from_pretrained(
+                policy,
+                adapter_path,
+                adapter_name=effective_adapter_name,
+                is_trainable=False,
+            )
+
+            if hasattr(policy, "set_adapter"):
+                policy.set_adapter(effective_adapter_name)
+
         policy.to(device)
         policy.eval()
 
-        device_override = {"device": device}
-        preprocessor, postprocessor = make_pre_post_processors(
-            policy.config,
-            pretrained_path=pretrained_name_or_path,
-            preprocessor_overrides={
-                "device_processor": device_override,
-                "rename_observations_processor": {"rename_map": rename_map or {}},
-            },
-            postprocessor_overrides={"device_processor": device_override},
+        # 3. Processors:
+        #    Prefer adapter path if available because adapter repo may contain
+        #    task-specific processor/stat files. Fallback to base path.
+        processor_primary_path = adapter_path or effective_base_path
+        preprocessor, postprocessor = self._make_pre_post_processors_with_fallback(
+            policy_config=policy.config,
+            primary_pretrained_path=processor_primary_path,
+            fallback_pretrained_path=effective_base_path,
+            device=device,
+            rename_map=rename_map,
         )
+
         elapsed = time.perf_counter() - start
 
         self.logger.info(
-            f"[multi-policy] Loaded policy_id={policy_id} to {device} in {elapsed:.4f}s"
+            f"[policy-load] Loaded policy_id={policy_id} to {device} in {elapsed:.4f}s"
         )
 
         return LoadedPolicySlot(
@@ -211,6 +390,9 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
             policy=policy,
             preprocessor=preprocessor,
             postprocessor=postprocessor,
+            base_model_path=base_model_path,
+            adapter_path=adapter_path,
+            adapter_name=effective_adapter_name if adapter_path else None,
         )
 
     def _setup_policy_slots(self, policy_specs: RemotePolicyConfig) -> None:
@@ -229,19 +411,25 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
         rename_map = getattr(policy_specs, "rename_map", {}) or {}
 
-        manifest = self._read_policy_manifest()
+        manifest = self._read_policy_manifest(policy_specs)
 
         self.policies.clear()
 
         if manifest is None:
             # Original behavior, but stored as a single slot.
+            effective_policy_type = self.config.policy_type or policy_specs.policy_type
+            effective_pretrained_path = self.config.base_model_path or policy_specs.pretrained_name_or_path
+
             slot = self._load_policy_slot(
                 policy_id="__default__",
-                policy_type=policy_specs.policy_type,
-                pretrained_name_or_path=policy_specs.pretrained_name_or_path,
+                policy_type=effective_policy_type,
+                pretrained_name_or_path=effective_pretrained_path,
                 device=policy_specs.device,
                 actions_per_chunk=policy_specs.actions_per_chunk,
                 rename_map=rename_map,
+                base_model_path=self.config.base_model_path,
+                adapter_path=None,
+                adapter_name=None,
             )
             self.policies[slot.policy_id] = slot
             self.default_policy_id = slot.policy_id
@@ -252,8 +440,14 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
 
             for entry in policies:
                 policy_id = entry["id"]
-                policy_type = entry.get("policy_type", policy_specs.policy_type)
-                pretrained_name_or_path = entry["pretrained_name_or_path"]
+                policy_type = entry.get("policy_type", self.config.policy_type or policy_specs.policy_type)
+                pretrained_name_or_path = entry.get(
+                    "pretrained_name_or_path",
+                    entry.get("base_model_path", policy_specs.pretrained_name_or_path),
+                )
+                base_model_path = entry.get("base_model_path", None)
+                adapter_path = entry.get("adapter_path", None)
+                adapter_name = entry.get("adapter_name", policy_id if adapter_path else None)
                 device = entry.get("device", policy_specs.device)
                 actions_per_chunk = int(entry.get("actions_per_chunk", policy_specs.actions_per_chunk))
 
@@ -267,6 +461,9 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
                     device=device,
                     actions_per_chunk=actions_per_chunk,
                     rename_map=rename_map,
+                    base_model_path=base_model_path,
+                    adapter_path=adapter_path,
+                    adapter_name=adapter_name,
                 )
                 self.policies[policy_id] = slot
 
@@ -539,6 +736,9 @@ class PolicyServer(services_pb2_grpc.AsyncInferenceServicer):
         observation: dict[str, torch.Tensor],
     ) -> torch.Tensor:
         """Get an action chunk from the selected policy slot."""
+        if slot.adapter_name and hasattr(slot.policy, "set_adapter"):
+            slot.policy.set_adapter(slot.adapter_name)
+
         chunk = slot.policy.predict_action_chunk(observation)
         if chunk.ndim != 3:
             chunk = chunk.unsqueeze(0)  # now shape is (B, chunk_size, action_dim)
