@@ -289,3 +289,4 @@ _backup_before_*/
 
 # Large model files unless handled by Git LFS
 *.onnx
+NBYtics/third_party/DeepFilterNet/
