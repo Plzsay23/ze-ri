@@ -19,56 +19,132 @@ from qwen_vl_utils import process_vision_info
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image as RosImage
-from std_msgs.msg import Bool, Float32, String
+from std_msgs.msg import Bool, Float32, Int32, String
 from transformers import AutoProcessor, Qwen3VLForConditionalGeneration
+
+
+LED_OFF = 0
+LED_RED = 1
+LED_GREEN = 2
+LED_BLUE = 3
+LED_YELLOW = 4
+LED_MAGENTA = 5
+LED_CYAN = 6
+LED_WHITE = 7
+
+LED_NAME_MAP = {
+    LED_OFF: "OFF",
+    LED_RED: "RED",
+    LED_GREEN: "GREEN",
+    LED_BLUE: "BLUE",
+    LED_YELLOW: "YELLOW",
+    LED_MAGENTA: "MAGENTA",
+    LED_CYAN: "CYAN",
+    LED_WHITE: "WHITE",
+}
+
+SUPPORTED_VLA_TASKS = {
+    "oxygen_mask_delivery",
+    "radio_delivery",
+}
+
+VALID_TASKS = {
+    "idle",
+    "status_check",
+    "oxygen_mask_delivery",
+    "radio_delivery",
+    "call_rescue",
+}
+
+VALID_NAV_INTENTS = {
+    "stop",
+    "hold_position",
+    "rotate_search",
+    "approach_person",
+    "follow_voice",
+    "retreat",
+    "go_to_safe_zone",
+}
 
 
 SYSTEM_PROMPT = """
 너는 재난 상황 초동 조치를 위한 모바일 매니퓰레이터 Ze-Ri의 VLM 에이전트다.
 
-현재 시스템에는 실제 로봇 정책 모델이 아직 없다.
-그러나 산소 마스크 전달 정책 모델이 존재한다고 가정한다.
+현재 시스템 구조:
+- STT 텍스트와 top-view RGB 카메라 이미지를 입력으로 받는다.
+- 너는 재난 상황을 판단한다.
+- LED 색상 명령을 결정한다.
+- 사용자에게 말할 TTS 문장을 만든다.
+- ACT 기반 VLA 실행이 필요한 경우 selected_task를 선택한다.
+- 실제 바퀴 raw 제어와 로봇팔 관절 제어는 직접 생성하지 않는다.
+- 실제 VLA 실행은 별도 executor가 수행한다.
 
-입력:
-- top-view RGB 카메라 이미지
-- STT에서 들어온 사용자 텍스트
+현재 사용 가능한 ACT VLA task는 정확히 두 개뿐이다:
+1. oxygen_mask_delivery
+   - 산소마스크 전달
+2. radio_delivery
+   - 무전기 전달
 
-목표:
-- 산소 마스크 전달이 필요한 상황인지 판단한다.
-- 필요하면 adapter_id를 "oxygen_mask_delivery_lora"로 선택한다.
-- 필요하지 않으면 adapter_id를 "idle_lora"로 선택한다.
-- 로봇이 사람에게 말할 짧은 발화문도 생성한다.
-- 반드시 JSON으로만 답한다.
-- JSON 바깥 문장은 절대 쓰지 않는다.
+이 두 task 외에는 VLA를 실행하면 안 된다.
+그 외 상황은 idle, status_check, call_rescue 중 하나로 판단한다.
 
-판단 기준:
+상황 판단 기준:
 - "숨쉬기 힘들다", "숨을 못 쉬겠다", "산소가 필요하다", "질식할 것 같다",
-  "가스 냄새가 난다", "연기 때문에 숨을 못 쉬겠다" 등은 산소 마스크 전달 필요.
-- 장면에 사람이 있고 연기/화재/유독가스 위험이 추정되면 산소 마스크 전달 필요.
-- 장면이 애매해도 사용자 텍스트가 호흡 곤란이면 산소 마스크 전달 필요.
+  "가스 냄새가 난다", "연기 때문에 숨을 못 쉬겠다" 등은 산소마스크 전달 필요.
+- 장면에 사람이 있고 연기/화재/유독가스 위험이 추정되면 산소마스크 전달 필요.
+- 장면이 애매해도 사용자 텍스트가 호흡 곤란이면 산소마스크 전달 필요.
+- "구조대랑 연락", "무전기", "119 불러", "연락해줘", "도와줘", "통신" 등은 무전기 전달 또는 구조대 통신 필요.
+- 사람이 반응하지 않거나, 처치가 불확실하거나, 직접 처치할 수 없는 상황이면 radio_delivery 또는 call_rescue를 선택한다.
 - 일반 대화, 인사, 위험 없음이면 idle.
+- 판단이 불확실하면 status_check를 선택하고 추가 질문을 한다.
+
+LED command rule:
+0 = OFF: 대기 또는 종료
+1 = RED: 즉시 위험, 호흡곤란, 출혈, 화재, 유독가스, 미반응자
+2 = GREEN: 안전, 정상, 비응급
+3 = BLUE: 구조대 통신, 무전기 전달, 외부 도움 필요
+4 = YELLOW: 주의, 관찰 필요, 판단 불확실
+5 = MAGENTA: VLA/로봇 작업 실행 중
+6 = CYAN: VLM 판단 중 또는 센싱 중
+7 = WHITE: 사용자 응답 대기 또는 판단 완료
 
 출력 JSON schema:
 {
-  "need_oxygen_mask": true,
-  "selected_task": "oxygen_mask_delivery|idle",
-  "adapter_id": "oxygen_mask_delivery_lora|idle_lora",
+  "hazard_level": "normal|caution|urgent|critical|danger",
+  "scene_status": "normal|respiratory_distress|needs_communication|no_response|fire_nearby|smoke_or_gas|blocked_path|unknown",
+  "selected_task": "idle|status_check|oxygen_mask_delivery|radio_delivery|call_rescue",
+  "nav_intent": "stop|hold_position|rotate_search|approach_person|follow_voice|retreat|go_to_safe_zone",
+  "vla_required": true,
+  "vla_instruction": "Deliver the oxygen mask to the person.",
+  "task_duration_sec": 20.0,
+  "led_cmd": 1,
   "confidence": 0.0,
   "reason": "짧은 한국어 이유",
-  "robot_speech": "로봇이 사람에게 말할 짧은 한국어 문장"
+  "robot_speech": "한국어 한두 문장"
 }
 
-robot_speech 규칙:
-- 산소 마스크 전달이 필요하면 안심시키는 문장으로 말한다.
-  예: "여기 산소 마스크입니다. 천천히 호흡하세요."
-- 산소 마스크 전달이 필요하지 않으면 짧게 대기 상태를 말한다.
-  예: "산소 마스크는 아직 필요하지 않습니다. 계속 확인하겠습니다."
-- robot_speech는 TTS로 읽을 수 있도록 한 문장 또는 두 문장 이내로 짧게 작성한다.
+규칙:
+- selected_task가 oxygen_mask_delivery이면:
+  - vla_required = true
+  - vla_instruction = "Deliver the oxygen mask to the person."
+  - led_cmd = 1 또는 5
+- selected_task가 radio_delivery이면:
+  - vla_required = true
+  - vla_instruction = "Deliver the radio device to the person."
+  - led_cmd = 3 또는 5
+- selected_task가 idle/status_check/call_rescue이면:
+  - vla_required = false
+- nav_intent는 고수준 의도만 출력한다. 속도값이나 cmd_vel은 절대 출력하지 않는다.
+- 반드시 JSON으로만 답한다.
+- JSON 바깥 문장은 절대 쓰지 않는다.
 """
 
 
 USER_PROMPT_TEMPLATE = """
-현재 카메라 장면과 STT 텍스트를 보고 산소 마스크 전달 모델을 실행해야 하는지 판단해라.
+현재 카메라 장면과 STT 텍스트를 보고 재난 상황을 판단해라.
+
+이번 단계에서는 ACT 기반 VLA task 실행까지 연동한다.
+단, 실제 실행 가능한 VLA task는 oxygen_mask_delivery, radio_delivery 두 개뿐이다.
 
 STT 텍스트:
 "{stt_text}"
@@ -79,12 +155,18 @@ JSON으로만 답해라.
 
 @dataclass
 class VLMDecision:
-    need_oxygen_mask: bool
+    hazard_level: str
+    scene_status: str
     selected_task: str
-    adapter_id: str
+    nav_intent: str
+    need_oxygen_mask: bool
     confidence: float
+    led_cmd: int
     reason: str
     robot_speech: str
+    vla_required: bool
+    vla_instruction: str
+    task_duration_sec: float
     raw_text: str
 
 
@@ -129,53 +211,286 @@ def extract_json_object(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def normalize_decision(parsed: Optional[Dict[str, Any]], raw_text: str) -> VLMDecision:
+def safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def clamp_led_cmd(value: Any, default: int = LED_OFF) -> int:
+    led_cmd = safe_int(value, default=default)
+    if led_cmd < 0 or led_cmd > 7:
+        return default
+    return led_cmd
+
+
+def normalize_str(value: Any, default: str = "") -> str:
+    if value is None:
+        return default
+    text = str(value).strip()
+    return text if text else default
+
+
+def infer_task_from_text(raw_text: str) -> Optional[str]:
+    text = raw_text.lower()
+
+    oxygen_keywords = [
+        "숨쉬기",
+        "숨 쉬기",
+        "숨을 못",
+        "숨 못",
+        "산소",
+        "질식",
+        "호흡",
+        "가스",
+        "연기",
+        "oxygen",
+        "breath",
+        "respiratory",
+        "smoke",
+        "gas",
+    ]
+
+    radio_keywords = [
+        "무전",
+        "연락",
+        "통신",
+        "119",
+        "구조대",
+        "도와줘",
+        "도움",
+        "신고",
+        "radio",
+        "rescue",
+        "communicat",
+        "call",
+    ]
+
+    if any(keyword in text for keyword in oxygen_keywords):
+        return "oxygen_mask_delivery"
+
+    if any(keyword in text for keyword in radio_keywords):
+        return "radio_delivery"
+
+    return None
+
+
+def resolve_led_cmd_from_fields(
+    selected_task: str,
+    scene_status: str,
+    hazard_level: str,
+    confidence: float,
+) -> int:
+    task = selected_task.lower().strip()
+    scene = scene_status.lower().strip()
+    hazard = hazard_level.lower().strip()
+
+    if task == "oxygen_mask_delivery":
+        return LED_RED
+
+    if task == "radio_delivery":
+        return LED_BLUE
+
+    if hazard in {"critical", "danger"}:
+        return LED_RED
+
+    if hazard == "urgent":
+        return LED_YELLOW
+
+    if scene in {"respiratory_distress", "fire_nearby", "smoke_or_gas", "no_response"}:
+        return LED_RED
+
+    if scene == "needs_communication":
+        return LED_BLUE
+
+    if confidence < 0.50 or task == "status_check" or scene == "unknown":
+        return LED_YELLOW
+
+    if hazard == "normal" or scene == "normal" or task == "idle":
+        return LED_GREEN
+
+    return LED_YELLOW
+
+
+def default_instruction_for_task(selected_task: str) -> str:
+    if selected_task == "oxygen_mask_delivery":
+        return "Deliver the oxygen mask to the person."
+
+    if selected_task == "radio_delivery":
+        return "Deliver the radio device to the person."
+
+    return ""
+
+
+def normalize_decision(
+    parsed: Optional[Dict[str, Any]],
+    raw_text: str,
+    stt_text: str,
+    default_task_duration_sec: float,
+) -> VLMDecision:
     if parsed is None:
+        fallback_task = infer_task_from_text(stt_text)
+
+        if fallback_task == "oxygen_mask_delivery":
+            return VLMDecision(
+                hazard_level="critical",
+                scene_status="respiratory_distress",
+                selected_task="oxygen_mask_delivery",
+                nav_intent="hold_position",
+                need_oxygen_mask=True,
+                confidence=0.50,
+                led_cmd=LED_RED,
+                reason="VLM JSON parsing failed, but STT text indicates respiratory distress.",
+                robot_speech="호흡곤란으로 판단했습니다. 산소 마스크 전달을 준비하겠습니다.",
+                vla_required=True,
+                vla_instruction=default_instruction_for_task("oxygen_mask_delivery"),
+                task_duration_sec=default_task_duration_sec,
+                raw_text=raw_text,
+            )
+
+        if fallback_task == "radio_delivery":
+            return VLMDecision(
+                hazard_level="urgent",
+                scene_status="needs_communication",
+                selected_task="radio_delivery",
+                nav_intent="hold_position",
+                need_oxygen_mask=False,
+                confidence=0.50,
+                led_cmd=LED_BLUE,
+                reason="VLM JSON parsing failed, but STT text indicates communication support.",
+                robot_speech="구조대와의 통신이 필요하다고 판단했습니다. 무전기 전달을 준비하겠습니다.",
+                vla_required=True,
+                vla_instruction=default_instruction_for_task("radio_delivery"),
+                task_duration_sec=default_task_duration_sec,
+                raw_text=raw_text,
+            )
+
         return VLMDecision(
+            hazard_level="caution",
+            scene_status="unknown",
+            selected_task="status_check",
+            nav_intent="hold_position",
             need_oxygen_mask=False,
-            selected_task="idle",
-            adapter_id="idle_lora",
             confidence=0.0,
+            led_cmd=LED_YELLOW,
             reason="VLM JSON parsing failed.",
             robot_speech="현재 판단 결과를 해석하지 못했습니다. 다시 말씀해 주세요.",
+            vla_required=False,
+            vla_instruction="",
+            task_duration_sec=default_task_duration_sec,
             raw_text=raw_text,
         )
 
-    need = bool(parsed.get("need_oxygen_mask", False))
+    hazard_level = normalize_str(parsed.get("hazard_level"), "caution").lower()
+    scene_status = normalize_str(parsed.get("scene_status"), "unknown").lower()
+    selected_task = normalize_str(parsed.get("selected_task"), "idle").lower()
+    nav_intent = normalize_str(parsed.get("nav_intent"), "hold_position").lower()
 
-    try:
-        confidence = float(parsed.get("confidence", 0.0))
-    except (TypeError, ValueError):
-        confidence = 0.0
+    if selected_task not in VALID_TASKS:
+        selected_task = "status_check"
 
+    if nav_intent not in VALID_NAV_INTENTS:
+        nav_intent = "hold_position"
+
+    confidence = safe_float(parsed.get("confidence", 0.0), default=0.0)
     confidence = max(0.0, min(1.0, confidence))
 
-    reason = str(parsed.get("reason", "")).strip()
-    if not reason:
-        reason = "No reason provided."
+    inferred_task = infer_task_from_text(stt_text)
 
-    robot_speech = str(parsed.get("robot_speech", "")).strip()
+    need_oxygen_mask = bool(parsed.get("need_oxygen_mask", False))
+    if selected_task == "oxygen_mask_delivery":
+        need_oxygen_mask = True
 
-    if need:
+    if inferred_task == "oxygen_mask_delivery" and selected_task not in SUPPORTED_VLA_TASKS:
         selected_task = "oxygen_mask_delivery"
-        adapter_id = "oxygen_mask_delivery_lora"
+        scene_status = "respiratory_distress"
+        hazard_level = "critical"
+        need_oxygen_mask = True
 
-        if not robot_speech:
-            robot_speech = "여기 산소 마스크입니다. 천천히 호흡하세요."
+    elif inferred_task == "radio_delivery" and selected_task not in SUPPORTED_VLA_TASKS:
+        selected_task = "radio_delivery"
+        scene_status = "needs_communication"
+        hazard_level = "urgent"
+
+    if selected_task == "oxygen_mask_delivery":
+        vla_required = True
+        need_oxygen_mask = True
+        if scene_status == "unknown":
+            scene_status = "respiratory_distress"
+        if hazard_level not in {"critical", "danger", "urgent"}:
+            hazard_level = "critical"
+
+    elif selected_task == "radio_delivery":
+        vla_required = True
+        if scene_status == "unknown":
+            scene_status = "needs_communication"
+        if hazard_level == "normal":
+            hazard_level = "urgent"
+
     else:
-        selected_task = "idle"
-        adapter_id = "idle_lora"
+        vla_required = False
 
-        if not robot_speech:
-            robot_speech = "산소 마스크는 아직 필요하지 않습니다. 계속 확인하겠습니다."
+    parsed_vla_required = parsed.get("vla_required", vla_required)
+    if selected_task in SUPPORTED_VLA_TASKS:
+        vla_required = bool(parsed_vla_required)
+    else:
+        vla_required = False
+
+    vla_instruction = normalize_str(parsed.get("vla_instruction"), "")
+    if vla_required and not vla_instruction:
+        vla_instruction = default_instruction_for_task(selected_task)
+
+    task_duration_sec = safe_float(
+        parsed.get("task_duration_sec", default_task_duration_sec),
+        default=default_task_duration_sec,
+    )
+    task_duration_sec = max(1.0, task_duration_sec)
+
+    fallback_led = resolve_led_cmd_from_fields(
+        selected_task=selected_task,
+        scene_status=scene_status,
+        hazard_level=hazard_level,
+        confidence=confidence,
+    )
+
+    led_cmd = clamp_led_cmd(parsed.get("led_cmd", fallback_led), default=fallback_led)
+
+    reason = normalize_str(parsed.get("reason"), "No reason provided.")
+    robot_speech = normalize_str(parsed.get("robot_speech"), "")
+
+    if not robot_speech:
+        if selected_task == "oxygen_mask_delivery":
+            robot_speech = "호흡곤란으로 판단했습니다. 산소 마스크 전달을 준비하겠습니다."
+        elif selected_task == "radio_delivery":
+            robot_speech = "구조대와의 통신이 필요하다고 판단했습니다. 무전기 전달을 준비하겠습니다."
+        elif selected_task == "status_check":
+            robot_speech = "상황 판단이 불확실합니다. 필요한 도움이 무엇인지 다시 말씀해 주세요."
+        elif selected_task == "call_rescue":
+            robot_speech = "구조대의 도움이 필요한 상황으로 판단했습니다. 안전 거리를 유지하겠습니다."
+        else:
+            robot_speech = "현재 긴급 조치가 필요한 상황은 아닌 것으로 판단됩니다."
 
     return VLMDecision(
-        need_oxygen_mask=need,
+        hazard_level=hazard_level,
+        scene_status=scene_status,
         selected_task=selected_task,
-        adapter_id=adapter_id,
+        nav_intent=nav_intent,
+        need_oxygen_mask=need_oxygen_mask,
         confidence=confidence,
+        led_cmd=led_cmd,
         reason=reason,
         robot_speech=robot_speech,
+        vla_required=vla_required,
+        vla_instruction=vla_instruction,
+        task_duration_sec=task_duration_sec,
         raw_text=raw_text,
     )
 
@@ -274,9 +589,16 @@ def clone_depth_snapshot_msg(
 
 
 class QwenVLMRunner:
-    def __init__(self, model_id: str, dtype_name: str, max_new_tokens: int):
+    def __init__(
+        self,
+        model_id: str,
+        dtype_name: str,
+        max_new_tokens: int,
+        default_task_duration_sec: float,
+    ):
         self.model_id = model_id
         self.max_new_tokens = max_new_tokens
+        self.default_task_duration_sec = default_task_duration_sec
 
         if dtype_name == "fp16":
             dtype = torch.float16
@@ -297,24 +619,13 @@ class QwenVLMRunner:
         messages = [
             {
                 "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": SYSTEM_PROMPT,
-                    }
-                ],
+                "content": [{"type": "text", "text": SYSTEM_PROMPT}],
             },
             {
                 "role": "user",
                 "content": [
-                    {
-                        "type": "image",
-                        "image": image,
-                    },
-                    {
-                        "type": "text",
-                        "text": prompt,
-                    },
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": prompt},
                 ],
             },
         ]
@@ -351,8 +662,13 @@ class QwenVLMRunner:
         )[0].strip()
 
         parsed = extract_json_object(output_text)
-        return normalize_decision(parsed, output_text)
 
+        return normalize_decision(
+            parsed=parsed,
+            raw_text=output_text,
+            stt_text=stt_text,
+            default_task_duration_sec=self.default_task_duration_sec,
+        )
 
 class ZeriVLMSTTBridgeNode(Node):
     def __init__(self):
@@ -371,6 +687,21 @@ class ZeriVLMSTTBridgeNode(Node):
         self.declare_parameter("tts_status_topic", "/zeri/tts/status")
         self.declare_parameter("stt_mute_topic", "/zeri/stt/mute")
 
+        self.declare_parameter("led_topic", "/zeri/led/cmd")
+        self.declare_parameter("led_on_startup", LED_WHITE)
+        self.declare_parameter("led_on_loading", LED_CYAN)
+        self.declare_parameter("led_on_inference", LED_CYAN)
+        self.declare_parameter("led_on_vla_running", LED_MAGENTA)
+        self.declare_parameter("led_on_vla_success", LED_WHITE)
+        self.declare_parameter("led_on_error", LED_YELLOW)
+        self.declare_parameter("led_on_shutdown", LED_OFF)
+
+        self.declare_parameter("vla_task_request_topic", "/zeri/vla/task_request")
+        self.declare_parameter("vla_status_topic", "/zeri/vla/status")
+        self.declare_parameter("enable_vla", True)
+        self.declare_parameter("vla_timeout_sec", 60.0)
+        self.declare_parameter("vla_default_task_duration_sec", 20.0)
+
         self.declare_parameter("vad_topic", "/zeri/audio/vad")
         self.declare_parameter("doa_topic", "/zeri/audio/doa_deg")
         self.declare_parameter("use_vad_gate", False)
@@ -378,7 +709,7 @@ class ZeriVLMSTTBridgeNode(Node):
 
         self.declare_parameter("model_id", "Qwen/Qwen3-VL-8B-Instruct")
         self.declare_parameter("dtype", "bf16")
-        self.declare_parameter("max_new_tokens", 128)
+        self.declare_parameter("max_new_tokens", 192)
         self.declare_parameter("confidence_threshold", 0.50)
         self.declare_parameter("queue_size", 4)
 
@@ -405,6 +736,46 @@ class ZeriVLMSTTBridgeNode(Node):
         self.tts_status_topic = str(self.get_parameter("tts_status_topic").value)
         self.stt_mute_topic = str(self.get_parameter("stt_mute_topic").value)
 
+        self.led_topic = str(self.get_parameter("led_topic").value)
+        self.led_on_startup = clamp_led_cmd(
+            self.get_parameter("led_on_startup").value,
+            LED_WHITE,
+        )
+        self.led_on_loading = clamp_led_cmd(
+            self.get_parameter("led_on_loading").value,
+            LED_CYAN,
+        )
+        self.led_on_inference = clamp_led_cmd(
+            self.get_parameter("led_on_inference").value,
+            LED_CYAN,
+        )
+        self.led_on_vla_running = clamp_led_cmd(
+            self.get_parameter("led_on_vla_running").value,
+            LED_MAGENTA,
+        )
+        self.led_on_vla_success = clamp_led_cmd(
+            self.get_parameter("led_on_vla_success").value,
+            LED_WHITE,
+        )
+        self.led_on_error = clamp_led_cmd(
+            self.get_parameter("led_on_error").value,
+            LED_YELLOW,
+        )
+        self.led_on_shutdown = clamp_led_cmd(
+            self.get_parameter("led_on_shutdown").value,
+            LED_OFF,
+        )
+
+        self.vla_task_request_topic = str(
+            self.get_parameter("vla_task_request_topic").value
+        )
+        self.vla_status_topic = str(self.get_parameter("vla_status_topic").value)
+        self.enable_vla = bool(self.get_parameter("enable_vla").value)
+        self.vla_timeout_sec = float(self.get_parameter("vla_timeout_sec").value)
+        self.vla_default_task_duration_sec = float(
+            self.get_parameter("vla_default_task_duration_sec").value
+        )
+
         self.vad_topic = str(self.get_parameter("vad_topic").value)
         self.doa_topic = str(self.get_parameter("doa_topic").value)
         self.use_vad_gate = bool(self.get_parameter("use_vad_gate").value)
@@ -414,15 +785,21 @@ class ZeriVLMSTTBridgeNode(Node):
         dtype = str(self.get_parameter("dtype").value)
         max_new_tokens = int(self.get_parameter("max_new_tokens").value)
         queue_size = int(self.get_parameter("queue_size").value)
-        self.confidence_threshold = float(self.get_parameter("confidence_threshold").value)
+        self.confidence_threshold = float(
+            self.get_parameter("confidence_threshold").value
+        )
 
         self.stt_gate_mode = str(self.get_parameter("stt_gate_mode").value)
         self.stt_min_chars = int(self.get_parameter("stt_min_chars").value)
-        self.wake_listen_window_sec = float(self.get_parameter("wake_listen_window_sec").value)
+        self.wake_listen_window_sec = float(
+            self.get_parameter("wake_listen_window_sec").value
+        )
         self.min_inference_interval_sec = float(
             self.get_parameter("min_inference_interval_sec").value
         )
-        self.duplicate_window_sec = float(self.get_parameter("duplicate_window_sec").value)
+        self.duplicate_window_sec = float(
+            self.get_parameter("duplicate_window_sec").value
+        )
 
         self.stt_block_after_tts_sec = float(
             self.get_parameter("stt_block_after_tts_sec").value
@@ -455,11 +832,17 @@ class ZeriVLMSTTBridgeNode(Node):
 
         self.pipeline_lock = threading.Lock()
         self.pipeline_busy = False
+
         self.waiting_for_tts = False
         self.tts_active = False
         self.stt_block_until = 0.0
         self.tts_deadline = 0.0
         self.stt_mute_state = False
+
+        self.waiting_for_vla = False
+        self.vla_active = False
+        self.vla_deadline = 0.0
+        self.active_vla_task_id: Optional[str] = None
 
         self.latest_vad = False
         self.latest_vad_time = 0.0
@@ -506,6 +889,13 @@ class ZeriVLMSTTBridgeNode(Node):
             reliable_qos,
         )
 
+        self.vla_status_sub = self.create_subscription(
+            String,
+            self.vla_status_topic,
+            self.vla_status_callback,
+            reliable_qos,
+        )
+
         self.vad_sub = self.create_subscription(
             Bool,
             self.vad_topic,
@@ -529,6 +919,18 @@ class ZeriVLMSTTBridgeNode(Node):
         self.robot_speech_publisher = self.create_publisher(
             String,
             self.robot_speech_topic,
+            reliable_qos,
+        )
+
+        self.led_publisher = self.create_publisher(
+            Int32,
+            self.led_topic,
+            reliable_qos,
+        )
+
+        self.vla_task_request_publisher = self.create_publisher(
+            String,
+            self.vla_task_request_topic,
             reliable_qos,
         )
 
@@ -562,32 +964,45 @@ class ZeriVLMSTTBridgeNode(Node):
         )
 
         self.get_logger().info("Zeri VLM-STT bridge node subscriptions:")
-        self.get_logger().info(f"  RGB input:       {self.rgb_topic}")
-        self.get_logger().info(f"  Depth input:     {self.depth_topic}")
-        self.get_logger().info(f"  STT input:       {self.stt_topic}")
-        self.get_logger().info(f"  TTS status:      {self.tts_status_topic}")
-        self.get_logger().info(f"  VAD input:       {self.vad_topic}")
-        self.get_logger().info(f"  DOA input:       {self.doa_topic}")
+        self.get_logger().info(f"  RGB input:         {self.rgb_topic}")
+        self.get_logger().info(f"  Depth input:       {self.depth_topic}")
+        self.get_logger().info(f"  STT input:         {self.stt_topic}")
+        self.get_logger().info(f"  TTS status:        {self.tts_status_topic}")
+        self.get_logger().info(f"  VLA status:        {self.vla_status_topic}")
+        self.get_logger().info(f"  VAD input:         {self.vad_topic}")
+        self.get_logger().info(f"  DOA input:         {self.doa_topic}")
 
         self.get_logger().info("Zeri VLM-STT bridge node publishers:")
-        self.get_logger().info(f"  Decision:        {self.decision_topic}")
-        self.get_logger().info(f"  Robot speech:    {self.robot_speech_topic}")
-        self.get_logger().info(f"  VLM RGB snap:    {self.vlm_input_rgb_topic}")
-        self.get_logger().info(f"  VLM Depth snap:  {self.vlm_input_depth_topic}")
-        self.get_logger().info(f"  VLM status:      {self.inference_status_topic}")
-        self.get_logger().info(f"  STT mute:        {self.stt_mute_topic}")
+        self.get_logger().info(f"  Decision:          {self.decision_topic}")
+        self.get_logger().info(f"  Robot speech:      {self.robot_speech_topic}")
+        self.get_logger().info(f"  LED command:       {self.led_topic}")
+        self.get_logger().info(f"  VLA task request:  {self.vla_task_request_topic}")
+        self.get_logger().info(f"  VLM RGB snap:      {self.vlm_input_rgb_topic}")
+        self.get_logger().info(f"  VLM Depth snap:    {self.vlm_input_depth_topic}")
+        self.get_logger().info(f"  VLM status:        {self.inference_status_topic}")
+        self.get_logger().info(f"  STT mute:          {self.stt_mute_topic}")
 
-        self.get_logger().info("STT gate settings:")
+        self.get_logger().info("Runtime settings:")
+        self.get_logger().info(f"  enable_vla: {self.enable_vla}")
+        self.get_logger().info(f"  vla_timeout_sec: {self.vla_timeout_sec}")
+        self.get_logger().info(
+            f"  vla_default_task_duration_sec: {self.vla_default_task_duration_sec}"
+        )
         self.get_logger().info(f"  stt_gate_mode: {self.stt_gate_mode}")
         self.get_logger().info(f"  wake_words: {self.wake_words}")
-        self.get_logger().info(f"  wake_listen_window_sec: {self.wake_listen_window_sec}")
+        self.get_logger().info(
+            f"  wake_listen_window_sec: {self.wake_listen_window_sec}"
+        )
         self.get_logger().info(f"  use_vad_gate: {self.use_vad_gate}")
         self.get_logger().info(f"  vad_hold_sec: {self.vad_hold_sec}")
-        self.get_logger().info(f"  stt_block_after_tts_sec: {self.stt_block_after_tts_sec}")
+        self.get_logger().info(
+            f"  stt_block_after_tts_sec: {self.stt_block_after_tts_sec}"
+        )
         self.get_logger().info(f"  tts_max_wait_sec: {self.tts_max_wait_sec}")
 
         self.publish_stt_mute(False)
 
+        self.publish_led(self.led_on_loading)
         self.publish_inference_status("loading_vlm_model")
         self.get_logger().info(f"Loading VLM model: {model_id}")
 
@@ -595,6 +1010,7 @@ class ZeriVLMSTTBridgeNode(Node):
             model_id=model_id,
             dtype_name=dtype,
             max_new_tokens=max_new_tokens,
+            default_task_duration_sec=self.vla_default_task_duration_sec,
         )
 
         self.worker = threading.Thread(
@@ -603,8 +1019,21 @@ class ZeriVLMSTTBridgeNode(Node):
         )
         self.worker.start()
 
+        self.publish_led(self.led_on_startup)
         self.publish_inference_status("waiting_for_camera_frame")
         self.get_logger().info("Zeri VLM-STT bridge node is ready.")
+
+    def publish_led(self, value: int) -> None:
+        led_cmd = clamp_led_cmd(value, default=LED_OFF)
+
+        msg = Int32()
+        msg.data = led_cmd
+        self.led_publisher.publish(msg)
+
+        led_name = LED_NAME_MAP.get(led_cmd, "UNKNOWN")
+        self.get_logger().info(
+            f"[LED] publish {self.led_topic} = {led_cmd} ({led_name})"
+        )
 
     def publish_inference_status(self, status: str) -> None:
         msg = String()
@@ -628,10 +1057,16 @@ class ZeriVLMSTTBridgeNode(Node):
     def begin_pipeline_block(self, reason: str) -> None:
         with self.pipeline_lock:
             self.pipeline_busy = True
+
             self.waiting_for_tts = False
             self.tts_active = False
             self.tts_deadline = time.time() + self.tts_max_wait_sec
             self.stt_block_until = 0.0
+
+            self.waiting_for_vla = False
+            self.vla_active = False
+            self.vla_deadline = 0.0
+            self.active_vla_task_id = None
 
         self.publish_stt_mute(True)
         self.publish_inference_status(f"stt_blocked: {reason}")
@@ -641,9 +1076,16 @@ class ZeriVLMSTTBridgeNode(Node):
 
         with self.pipeline_lock:
             self.pipeline_busy = False
+
             self.waiting_for_tts = False
             self.tts_active = False
             self.tts_deadline = 0.0
+
+            self.waiting_for_vla = False
+            self.vla_active = False
+            self.vla_deadline = 0.0
+            self.active_vla_task_id = None
+
             self.stt_block_until = cooldown_until
 
         self.publish_inference_status(f"stt_block_cooldown: {reason}")
@@ -658,6 +1100,44 @@ class ZeriVLMSTTBridgeNode(Node):
 
         self.publish_inference_status("waiting_for_tts")
 
+    def mark_tts_done_and_maybe_release(self, reason: str) -> None:
+        should_release = False
+
+        with self.pipeline_lock:
+            self.waiting_for_tts = False
+            self.tts_active = False
+            self.tts_deadline = 0.0
+
+            if not self.waiting_for_vla and not self.vla_active:
+                should_release = True
+
+        if should_release:
+            self.release_pipeline_block(reason)
+        else:
+            self.publish_inference_status(f"tts_done_waiting_for_vla: {reason}")
+
+    def finish_vla_and_maybe_release(self, reason: str, success: bool) -> None:
+        should_release = False
+
+        with self.pipeline_lock:
+            self.waiting_for_vla = False
+            self.vla_active = False
+            self.vla_deadline = 0.0
+            self.active_vla_task_id = None
+
+            if not self.waiting_for_tts and not self.tts_active:
+                should_release = True
+
+        if success:
+            self.publish_led(self.led_on_vla_success)
+        else:
+            self.publish_led(self.led_on_error)
+
+        if should_release:
+            self.release_pipeline_block(reason)
+        else:
+            self.publish_inference_status(f"vla_done_waiting_for_tts: {reason}")
+
     def is_stt_input_blocked(self) -> bool:
         now = time.time()
 
@@ -668,6 +1148,9 @@ class ZeriVLMSTTBridgeNode(Node):
             if self.tts_active:
                 return True
 
+            if self.waiting_for_vla or self.vla_active:
+                return True
+
             if now < self.stt_block_until:
                 return True
 
@@ -676,14 +1159,21 @@ class ZeriVLMSTTBridgeNode(Node):
     def pipeline_timer_callback(self) -> None:
         now = time.time()
 
-        should_timeout = False
+        should_tts_timeout = False
+        should_vla_timeout = False
         should_unmute = False
 
         with self.pipeline_lock:
-            should_timeout = (
+            should_tts_timeout = (
                 self.waiting_for_tts
                 and self.tts_deadline > 0.0
                 and now > self.tts_deadline
+            )
+
+            should_vla_timeout = (
+                self.waiting_for_vla
+                and self.vla_deadline > 0.0
+                and now > self.vla_deadline
             )
 
             should_unmute = (
@@ -691,18 +1181,26 @@ class ZeriVLMSTTBridgeNode(Node):
                 and not self.pipeline_busy
                 and not self.waiting_for_tts
                 and not self.tts_active
+                and not self.waiting_for_vla
+                and not self.vla_active
                 and self.stt_block_until > 0.0
                 and now >= self.stt_block_until
             )
 
-        if should_timeout:
-            self.get_logger().warn("TTS wait timeout. Releasing STT block.")
-            self.release_pipeline_block("tts_timeout")
+        if should_vla_timeout:
+            self.get_logger().warn("VLA wait timeout. Returning to LISTEN state.")
+            self.publish_inference_status("vla_wait_timeout_returning_to_listen")
+            self.finish_vla_and_maybe_release("vla_wait_timeout", success=False)
+            return
+
+        if should_tts_timeout:
+            self.get_logger().warn("TTS wait timeout.")
+            self.mark_tts_done_and_maybe_release("tts_timeout")
             return
 
         if should_unmute:
             self.publish_stt_mute(False)
-            self.publish_inference_status("stt_unblocked_after_tts")
+            self.publish_inference_status("stt_unblocked_after_cooldown")
 
     def tts_status_callback(self, msg: String) -> None:
         status = msg.data.strip()
@@ -739,11 +1237,65 @@ class ZeriVLMSTTBridgeNode(Node):
                     self.pipeline_busy
                     or self.waiting_for_tts
                     or self.tts_active
+                    or self.waiting_for_vla
+                    or self.vla_active
                 )
 
             if was_blocking:
-                self.release_pipeline_block(f"tts_status_{status}")
+                self.mark_tts_done_and_maybe_release(f"tts_status_{status}")
 
+            return
+
+    def vla_status_callback(self, msg: String) -> None:
+        try:
+            data = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn(f"Invalid VLA status JSON: {msg.data}")
+            return
+
+        task_id = str(data.get("task_id", "")).strip()
+        status = str(data.get("status", "")).strip()
+        reason = str(data.get("reason", "")).strip()
+
+        with self.pipeline_lock:
+            active_task_id = self.active_vla_task_id
+
+        if not active_task_id:
+            if status not in {"idle"}:
+                self.get_logger().info(
+                    f"Ignored VLA status because no active VLA task: {msg.data}"
+                )
+            return
+
+        if task_id not in {active_task_id, "none"}:
+            self.get_logger().info(
+                f"Ignored VLA status for non-active task: "
+                f"status_task_id={task_id}, active_task_id={active_task_id}"
+            )
+            return
+
+        self.get_logger().info(f"[VLA STATUS RX] {msg.data}")
+
+        if status in {"accepted", "running"}:
+            with self.pipeline_lock:
+                self.waiting_for_vla = True
+                self.vla_active = True
+                self.vla_deadline = time.time() + self.vla_timeout_sec
+
+            self.publish_led(self.led_on_vla_running)
+            self.publish_inference_status(f"vla_{status}")
+            return
+
+        if status == "succeeded":
+            self.publish_inference_status("vla_succeeded_returning_to_listen")
+            self.finish_vla_and_maybe_release("vla_succeeded", success=True)
+            return
+
+        if status in {"failed", "timeout", "rejected"}:
+            self.publish_inference_status(
+                f"vla_{status}_returning_to_listen: {reason}"
+            )
+            self.finish_vla_and_maybe_release(f"vla_{status}", success=False)
             return
 
     def vad_callback(self, msg: Bool) -> None:
@@ -887,7 +1439,9 @@ class ZeriVLMSTTBridgeNode(Node):
             return
 
         if self.is_stt_input_blocked():
-            self.get_logger().info(f"Ignored STT while pipeline is busy: {raw_stt_text}")
+            self.get_logger().info(
+                f"Ignored STT while pipeline is busy: {raw_stt_text}"
+            )
             self.publish_inference_status("ignored_stt_pipeline_busy")
             return
 
@@ -917,7 +1471,9 @@ class ZeriVLMSTTBridgeNode(Node):
         except queue.Full:
             try:
                 dropped = self.text_queue.get_nowait()
-                self.get_logger().warn(f"Dropped old STT text due to full queue: {dropped}")
+                self.get_logger().warn(
+                    f"Dropped old STT text due to full queue: {dropped}"
+                )
             except queue.Empty:
                 pass
 
@@ -926,6 +1482,7 @@ class ZeriVLMSTTBridgeNode(Node):
             except queue.Full:
                 self.get_logger().error("Failed to enqueue STT text.")
                 self.publish_inference_status("queue_full_error")
+                self.publish_led(self.led_on_error)
                 self.release_pipeline_block("queue_full_error")
 
     def get_latest_frames(
@@ -939,6 +1496,48 @@ class ZeriVLMSTTBridgeNode(Node):
                 self.latest_depth_time,
             )
 
+    def publish_vla_task_request(self, decision: VLMDecision) -> Optional[str]:
+        if not self.enable_vla:
+            self.get_logger().info("VLA request skipped because enable_vla=false.")
+            return None
+
+        if not decision.vla_required:
+            return None
+
+        if decision.selected_task not in SUPPORTED_VLA_TASKS:
+            self.get_logger().warn(
+                f"VLA request skipped. Unsupported task: {decision.selected_task}"
+            )
+            return None
+
+        task_id = f"{decision.selected_task}_{int(time.time() * 1000)}"
+
+        payload = {
+            "task_id": task_id,
+            "selected_task": decision.selected_task,
+            "instruction": decision.vla_instruction,
+            "task_duration_sec": decision.task_duration_sec,
+            "timeout_sec": self.vla_timeout_sec,
+            "source": "zeri_vlm_stt_bridge_node",
+        }
+
+        msg = String()
+        msg.data = json.dumps(payload, ensure_ascii=False)
+        self.vla_task_request_publisher.publish(msg)
+
+        with self.pipeline_lock:
+            self.waiting_for_vla = True
+            self.vla_active = True
+            self.vla_deadline = time.time() + self.vla_timeout_sec
+            self.active_vla_task_id = task_id
+
+        self.publish_led(self.led_on_vla_running)
+        self.publish_inference_status(f"vla_task_requested: {task_id}")
+
+        self.get_logger().info(f"[VLA REQUEST] {msg.data}")
+
+        return task_id
+
     def worker_loop(self) -> None:
         while not self.stop_event.is_set():
             try:
@@ -949,6 +1548,7 @@ class ZeriVLMSTTBridgeNode(Node):
             start_time = time.time()
 
             try:
+                self.publish_led(self.led_on_inference)
                 self.publish_inference_status("getting_latest_camera_frame")
 
                 rgb_msg, depth_msg, rgb_time, depth_time = self.get_latest_frames()
@@ -956,6 +1556,7 @@ class ZeriVLMSTTBridgeNode(Node):
                 if rgb_msg is None:
                     self.get_logger().warn("No RGB frame received yet.")
                     self.publish_inference_status("waiting_for_rgb_frame")
+                    self.publish_led(self.led_on_error)
                     self.release_pipeline_block("no_rgb_frame")
                     continue
 
@@ -964,6 +1565,7 @@ class ZeriVLMSTTBridgeNode(Node):
                 if image is None:
                     self.get_logger().error("Failed to convert RGB ROS image to PIL.")
                     self.publish_inference_status("rgb_conversion_error")
+                    self.publish_led(self.led_on_error)
                     self.release_pipeline_block("rgb_conversion_error")
                     continue
 
@@ -1002,52 +1604,21 @@ class ZeriVLMSTTBridgeNode(Node):
                 elapsed = time.time() - start_time
 
                 self.publish_inference_status("vlm_inference_done")
-
-                mock_action = "idle"
-
-                if (
-                    decision.need_oxygen_mask
-                    and decision.adapter_id == "oxygen_mask_delivery_lora"
-                    and decision.confidence >= self.confidence_threshold
-                ):
-                    mock_action = "execute_oxygen_mask_delivery"
+                self.publish_led(decision.led_cmd)
 
                 camera_age_sec = None
                 if rgb_time is not None:
                     camera_age_sec = round(time.time() - rgb_time, 3)
 
+                depth_age_sec = None
+                if depth_time is not None:
+                    depth_age_sec = round(time.time() - depth_time, 3)
+
                 doa_age_sec = None
                 if self.latest_doa_time > 0.0:
                     doa_age_sec = round(time.time() - self.latest_doa_time, 3)
 
-                result = {
-                    "stt_text": stt_text,
-                    "need_oxygen_mask": decision.need_oxygen_mask,
-                    "selected_task": decision.selected_task,
-                    "adapter_id": decision.adapter_id,
-                    "confidence": decision.confidence,
-                    "reason": decision.reason,
-                    "robot_speech": decision.robot_speech,
-                    "mock_action": mock_action,
-                    "latency_sec": round(elapsed, 3),
-                    "camera_age_sec": camera_age_sec,
-                    "doa_deg": self.latest_doa_deg,
-                    "doa_age_sec": doa_age_sec,
-                    "latest_vad": self.latest_vad,
-                    "use_vad_gate": self.use_vad_gate,
-                    "raw_vlm_output": decision.raw_text,
-                    "live_rgb_topic": self.rgb_topic,
-                    "live_depth_topic": self.depth_topic,
-                    "vlm_input_rgb_topic": self.vlm_input_rgb_topic,
-                    "vlm_input_depth_topic": self.vlm_input_depth_topic,
-                    "stt_mute_topic": self.stt_mute_topic,
-                    "tts_status_topic": self.tts_status_topic,
-                }
-
-                decision_msg = String()
-                decision_msg.data = json.dumps(result, ensure_ascii=False)
-                self.decision_publisher.publish(decision_msg)
-
+                vla_task_id = None
                 speech_text = decision.robot_speech.strip()
 
                 if speech_text:
@@ -1059,36 +1630,79 @@ class ZeriVLMSTTBridgeNode(Node):
 
                     self.get_logger().info(f"Published robot speech: {speech_text}")
                     self.get_logger().info(f"[ROBOT SPEECH] {speech_text}")
-                else:
-                    self.release_pipeline_block("no_robot_speech")
+
+                if decision.vla_required:
+                    vla_task_id = self.publish_vla_task_request(decision)
+
+                result = {
+                    "stt_text": stt_text,
+                    "hazard_level": decision.hazard_level,
+                    "scene_status": decision.scene_status,
+                    "selected_task": decision.selected_task,
+                    "nav_intent": decision.nav_intent,
+                    "need_oxygen_mask": decision.need_oxygen_mask,
+                    "confidence": decision.confidence,
+                    "led_cmd": decision.led_cmd,
+                    "led_name": LED_NAME_MAP.get(decision.led_cmd, "UNKNOWN"),
+                    "reason": decision.reason,
+                    "robot_speech": decision.robot_speech,
+                    "vla_required": decision.vla_required,
+                    "vla_instruction": decision.vla_instruction,
+                    "vla_task_id": vla_task_id,
+                    "vla_task_request_topic": self.vla_task_request_topic,
+                    "vla_status_topic": self.vla_status_topic,
+                    "robot_control_mode": "ACT_RTC_TASK_REQUEST",
+                    "raw_cmd_vel_generated_by_vlm": False,
+                    "latency_sec": round(elapsed, 3),
+                    "camera_age_sec": camera_age_sec,
+                    "depth_age_sec": depth_age_sec,
+                    "doa_deg": self.latest_doa_deg,
+                    "doa_age_sec": doa_age_sec,
+                    "latest_vad": self.latest_vad,
+                    "use_vad_gate": self.use_vad_gate,
+                    "raw_vlm_output": decision.raw_text,
+                    "live_rgb_topic": self.rgb_topic,
+                    "live_depth_topic": self.depth_topic,
+                    "vlm_input_rgb_topic": self.vlm_input_rgb_topic,
+                    "vlm_input_depth_topic": self.vlm_input_depth_topic,
+                    "led_topic": self.led_topic,
+                    "stt_mute_topic": self.stt_mute_topic,
+                    "tts_status_topic": self.tts_status_topic,
+                }
+
+                decision_msg = String()
+                decision_msg.data = json.dumps(result, ensure_ascii=False)
+                self.decision_publisher.publish(decision_msg)
 
                 self.get_logger().info(f"Published VLM decision: {decision_msg.data}")
+                self.log_decision(decision, vla_task_id)
 
-                if mock_action == "execute_oxygen_mask_delivery":
-                    self.log_mock_action(decision)
-                else:
-                    self.log_idle_action(decision)
+                if not speech_text and not vla_task_id:
+                    self.release_pipeline_block("no_tts_no_vla")
 
             except Exception as exc:
                 err = f"error: {exc}"
                 self.get_logger().error(f"VLM worker error: {exc}")
                 self.publish_inference_status(err)
+                self.publish_led(self.led_on_error)
                 self.release_pipeline_block("vlm_worker_error")
 
-    def log_mock_action(self, decision: VLMDecision) -> None:
-        self.get_logger().info("[MOCK ACTION] Selected adapter: oxygen_mask_delivery_lora")
-        self.get_logger().info("[MOCK ACTION] Loading oxygen_mask_delivery_policy ... MOCK")
-        self.get_logger().info("[MOCK ACTION] Moving mobile base toward victim ... MOCK")
-        self.get_logger().info("[MOCK ACTION] Executing SO-101 arm trajectory ... MOCK")
-        self.get_logger().info(f"[MOCK ACTION] Reason: {decision.reason}")
-        self.get_logger().info(f"[ROBOT SPEECH] {decision.robot_speech}")
-        self.get_logger().info("[MOCK ACTION] DONE")
-
-    def log_idle_action(self, decision: VLMDecision) -> None:
-        self.get_logger().info("[MOCK ACTION] No oxygen-mask delivery required.")
-        self.get_logger().info(f"[MOCK ACTION] Reason: {decision.reason}")
-        self.get_logger().info(f"[ROBOT SPEECH] {decision.robot_speech}")
-        self.get_logger().info("[MOCK ACTION] IDLE")
+    def log_decision(self, decision: VLMDecision, vla_task_id: Optional[str]) -> None:
+        self.get_logger().info("[VLM DECISION]")
+        self.get_logger().info(f"  hazard_level: {decision.hazard_level}")
+        self.get_logger().info(f"  scene_status: {decision.scene_status}")
+        self.get_logger().info(f"  selected_task: {decision.selected_task}")
+        self.get_logger().info(f"  nav_intent: {decision.nav_intent}")
+        self.get_logger().info(f"  confidence: {decision.confidence}")
+        self.get_logger().info(
+            f"  LED: {decision.led_cmd} "
+            f"({LED_NAME_MAP.get(decision.led_cmd, 'UNKNOWN')})"
+        )
+        self.get_logger().info(f"  vla_required: {decision.vla_required}")
+        self.get_logger().info(f"  vla_instruction: {decision.vla_instruction}")
+        self.get_logger().info(f"  vla_task_id: {vla_task_id}")
+        self.get_logger().info(f"  reason: {decision.reason}")
+        self.get_logger().info(f"  robot_speech: {decision.robot_speech}")
 
     def destroy_node(self) -> None:
         self.get_logger().info("Stopping VLM-STT bridge node.")
@@ -1096,6 +1710,7 @@ class ZeriVLMSTTBridgeNode(Node):
         try:
             self.publish_inference_status("shutting_down")
             self.publish_stt_mute(False)
+            self.publish_led(self.led_on_shutdown)
         except Exception:
             pass
 

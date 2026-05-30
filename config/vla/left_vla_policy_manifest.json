@@ -1,0 +1,11 @@
+{
+  "default_policy_id": "black_act",
+  "policies": [
+    {
+      "id": "black_act",
+      "policy_type": "act",
+      "pretrained_name_or_path": "plzsay/black_act",
+      "description": "Left-arm black ACT policy."
+    }
+  ]
+}

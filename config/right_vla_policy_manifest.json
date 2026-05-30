@@ -1,0 +1,17 @@
+{
+  "default_policy_id": "radio_delivery",
+  "policies": [
+    {
+      "id": "radio_delivery",
+      "policy_type": "act",
+      "pretrained_name_or_path": "plzsay/pap_black",
+      "description": "Right-arm policy for delivering a radio device to a person. Test model currently points to plzsay/pap_black."
+    },
+    {
+      "id": "right_extra_task_1",
+      "policy_type": "act",
+      "pretrained_name_or_path": "plzsay/pap_black",
+      "description": "Placeholder right-arm task. Replace with another HF model repo later."
+    }
+  ]
+}

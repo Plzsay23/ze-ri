@@ -1,0 +1,11 @@
+{
+  "default_policy_id": "blue_act",
+  "policies": [
+    {
+      "id": "blue_act",
+      "policy_type": "act",
+      "pretrained_name_or_path": "plzsay/blue_act",
+      "description": "Right-arm blue ACT policy."
+    }
+  ]
+}
