@@ -202,8 +202,16 @@ class KeyboardOdomNode(Node):
 
         # ENC 순서: LF RF LR RR
         vx = (v_lf + v_rf + v_lr + v_rr) / 4.0
-        vy = (-v_lf + v_rf + v_lr - v_rr) / 4.0
-        wz = (-v_lf + v_rf - v_lr + v_rr) / (4.0 * (self.lx + self.ly))
+
+        # ROS base_link convention:
+        #   +x = forward
+        #   +y = left
+        #   +yaw = counter-clockwise / left turn
+        #
+        # Current Arduino encoder sign/order makes lateral and yaw mirrored in RViz,
+        # while forward/backward is correct. Therefore invert vy and wz only.
+        vy = -((-v_lf + v_rf + v_lr - v_rr) / 4.0)
+        wz = -((-v_lf + v_rf - v_lr + v_rr) / (4.0 * (self.lx + self.ly)))
 
         cos_yaw = math.cos(self.yaw)
         sin_yaw = math.sin(self.yaw)

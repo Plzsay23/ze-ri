@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import base64
 import json
+import math
 import threading
 import time
 from typing import Any, Dict, Optional
@@ -46,43 +47,49 @@ INDEX_HTML = r"""
       box-sizing: border-box;
     }
 
-    body {
+    html, body {
+      width: 100%;
+      height: 100%;
       margin: 0;
+      padding: 0;
+    }
+
+    body {
       background: var(--bg);
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       color: var(--dark);
-      overflow: auto;
+      overflow: hidden;
     }
 
     header {
-      height: 42px;
+      height: 36px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 14px;
+      padding: 0 10px;
       background: #0f172a;
       color: white;
       border-bottom: 3px solid #2563eb;
     }
 
     header .title {
-      font-size: 18px;
+      font-size: 16px;
       font-weight: 900;
       letter-spacing: 0.2px;
     }
 
     header .status {
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 700;
       color: #bfdbfe;
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
     }
 
     .dot {
-      width: 9px;
-      height: 9px;
+      width: 8px;
+      height: 8px;
       border-radius: 50%;
       background: #ef4444;
       display: inline-block;
@@ -92,23 +99,19 @@ INDEX_HTML = r"""
       background: #22c55e;
     }
 
-    /* ===== 레이아웃 핵심 변경 부분 =====
-       6열, 3행으로 두고
-       총 세로 길이는 기존보다 약 1.5배 정도 커지게 설정
-    */
     .grid {
+      width: 100vw;
+      height: calc(100vh - 36px);
       display: grid;
-      grid-template-columns: repeat(6, 1fr);
-      grid-template-rows: 540px 240px 240px;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      grid-template-rows: minmax(0, 45fr) minmax(0, 27.5fr) minmax(0, 27.5fr);
       grid-template-areas:
-        "rgb  rgb  rgb  depth depth depth"
-        "text text map  map   base  base"
-        "text text map  map   arm   arm";
-      gap: 12px;
-      padding: 12px 10px 10px 10px;
-      height: auto;
-      max-width: 1600px;
-      margin: 0 auto;
+        "rgb  rgb  rgb  rgb  rgb  rgb  depth depth depth depth depth depth"
+        "text text text map  map  map  map   map   base  base  base  base"
+        "text text text map  map  map  map   map   arm   arm   arm   arm";
+      gap: 10px;
+      padding: 10px;
+      margin: 0;
     }
 
     .card {
@@ -132,16 +135,17 @@ INDEX_HTML = r"""
     .arm-card { grid-area: arm; }
 
     .card-title {
-      height: 36px;
-      flex: 0 0 36px;
-      padding: 7px 12px;
-      font-size: 17px;
+      height: 32px;
+      flex: 0 0 32px;
+      padding: 6px 10px;
+      font-size: 15px;
       font-weight: 900;
       background: rgba(0, 0, 0, 0.17);
       border-bottom: 1px solid rgba(255, 255, 255, 0.18);
       display: flex;
       align-items: center;
       justify-content: space-between;
+      min-width: 0;
     }
 
     .card-title small {
@@ -157,12 +161,13 @@ INDEX_HTML = r"""
 
     .media-wrap {
       position: relative;
-      flex: 1;
+      flex: 1 1 auto;
       min-height: 0;
       display: flex;
       align-items: center;
       justify-content: center;
       background: var(--dark-panel);
+      overflow: hidden;
     }
 
     .media-wrap img {
@@ -175,23 +180,23 @@ INDEX_HTML = r"""
 
     .placeholder {
       color: #bfdbfe;
-      font-size: 22px;
+      font-size: 20px;
       font-weight: 900;
       text-align: center;
       padding: 14px;
     }
 
     .text-panel {
-      flex: 1;
+      flex: 1 1 auto;
       min-height: 0;
-      padding: 10px;
+      padding: 8px;
       overflow: auto;
       background: rgba(5, 20, 48, 0.20);
     }
 
     .metric {
-      margin-bottom: 8px;
-      padding: 8px 10px;
+      margin-bottom: 7px;
+      padding: 7px 9px;
       background: rgba(255, 255, 255, 0.13);
       border: 1px solid rgba(255, 255, 255, 0.18);
       border-radius: 8px;
@@ -199,55 +204,58 @@ INDEX_HTML = r"""
 
     .metric-label {
       color: #dbeafe;
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 900;
       margin-bottom: 4px;
     }
 
     .metric-value {
       color: white;
-      font-size: 17px;
+      font-size: 15px;
       font-weight: 800;
       white-space: pre-wrap;
       word-break: break-word;
     }
 
     .metric-value.small {
-      font-size: 12px;
-      line-height: 1.35;
+      font-size: 11px;
+      line-height: 1.30;
       font-weight: 700;
     }
 
     .status-big {
-      flex: 1;
+      flex: 1 1 auto;
       min-height: 0;
-      padding: 14px;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      gap: 10px;
+      padding: 8px;
+      display: block;
       background: rgba(5, 20, 48, 0.15);
+      overflow: auto;
     }
 
     .status-line {
-      padding: 12px;
+      min-height: 100%;
+      padding: 8px;
       border-radius: 8px;
       background: rgba(255, 255, 255, 0.13);
       border: 1px solid rgba(255, 255, 255, 0.18);
+      overflow: auto;
     }
 
     .status-line .label {
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 900;
       color: #dbeafe;
-      margin-bottom: 6px;
+      margin-bottom: 5px;
     }
 
     .status-line .value {
-      font-size: 24px;
-      font-weight: 900;
+      font-size: 12px;
+      line-height: 1.23;
+      font-weight: 800;
       color: white;
+      white-space: pre-wrap;
       word-break: break-word;
+      overflow-wrap: anywhere;
     }
 
     @media (max-width: 1200px) {
@@ -256,8 +264,16 @@ INDEX_HTML = r"""
       }
 
       .grid {
+        height: auto;
+        min-height: calc(100vh - 36px);
         grid-template-columns: 1fr;
-        grid-template-rows: repeat(6, 320px);
+        grid-template-rows:
+          320px
+          320px
+          360px
+          360px
+          260px
+          260px;
         grid-template-areas:
           "rgb"
           "depth"
@@ -265,7 +281,6 @@ INDEX_HTML = r"""
           "map"
           "base"
           "arm";
-        height: auto;
       }
     }
   </style>
@@ -433,6 +448,10 @@ INDEX_HTML = r"""
         `mock_action: ${safeText(d.mock_action, "-")}`,
         `latency_sec: ${safeText(d.latency_sec, "-")}`,
         `camera_age_sec: ${safeText(d.camera_age_sec, "-")}`,
+        `latest_vad: ${safeText(d.latest_vad, "-")}`,
+        `use_vad_gate: ${safeText(d.use_vad_gate, "-")}`,
+        `doa_deg: ${safeText(d.doa_deg, "-")}`,
+        `doa_age_sec: ${safeText(d.doa_age_sec, "-")}`,
         `live_rgb_topic: ${safeText(d.live_rgb_topic, "-")}`,
         `live_depth_topic: ${safeText(d.live_depth_topic, "-")}`,
         `vlm_rgb_snapshot: ${safeText(d.vlm_input_rgb_topic, "-")}`,
@@ -744,6 +763,14 @@ class ZeriDashboardNode(Node):
         self.get_logger().info(f"  Arm status:       {args.arm_status_topic}")
         self.get_logger().info(f"  Image QoS:        {args.image_qos}")
 
+        self.mock_start_time = time.time()
+
+        if args.mock_status:
+            self.mock_status_timer = self.create_timer(0.5, self.mock_status_callback)
+            self.get_logger().info("  Mock status:      enabled")
+        else:
+            self.get_logger().info("  Mock status:      disabled")
+
     def rgb_callback(self, msg: Image) -> None:
         bgr = image_msg_to_bgr(msg)
         data_url = encode_image_to_data_url(
@@ -810,10 +837,74 @@ class ZeriDashboardNode(Node):
         STATE.update(arm_status=msg.data)
         STATE.update_timestamp("arm")
 
+    def mock_status_callback(self) -> None:
+        t = time.time() - self.mock_start_time
+
+        base_modes = [
+            "IDLE",
+            "VOICE_TRACKING",
+            "APPROACHING_TARGET",
+            "OBSTACLE_GUARD_ACTIVE",
+        ]
+        base_mode = base_modes[int(t // 6.0) % len(base_modes)]
+
+        vx = 0.10 + 0.04 * math.sin(t * 0.7)
+        vy = 0.02 * math.sin(t * 0.5)
+        wz = 0.18 * math.sin(t * 0.4)
+
+        left_rpm = 22.0 + 5.0 * math.sin(t * 0.9)
+        rear_rpm = 18.0 + 4.0 * math.sin(t * 0.8)
+        right_rpm = 22.0 + 5.0 * math.sin(t * 1.0 + 0.5)
+
+        base_battery = max(0.0, 96.0 - 0.015 * t)
+
+        base_status = (
+            f"MODE: {base_mode}\n"
+            f"cmd_vel: vx={vx:.2f}, vy={vy:.2f}, wz={wz:.2f}\n"
+            f"rpm: L={left_rpm:.1f}, Rr={rear_rpm:.1f}, R={right_rpm:.1f}\n"
+            f"battery={base_battery:.1f}% | obstacle_guard=ON | source=MOCK"
+        )
+
+        arm_states = [
+            "HOME",
+            "READY",
+            "MASK_PICK_PREP",
+            "HOLDING_OXYGEN_MASK",
+        ]
+        arm_state = arm_states[int(t // 7.0) % len(arm_states)]
+
+        shoulder_pan = 5.0 * math.sin(t * 0.4)
+        shoulder_lift = -35.0 + 4.0 * math.sin(t * 0.5)
+        elbow_flex = 42.0 + 6.0 * math.sin(t * 0.6)
+        wrist_flex = 80.0 + 5.0 * math.sin(t * 0.7)
+        wrist_roll = 120.0 + 8.0 * math.sin(t * 0.8)
+        gripper = 35.0 + 15.0 * math.sin(t * 0.9)
+
+        arm_status = (
+            f"STATE: {arm_state}\n"
+            f"policy: idle_lora | SO-101: MOCK\n"
+            f"joints_deg: pan={shoulder_pan:.1f}, lift={shoulder_lift:.1f}, "
+            f"elbow={elbow_flex:.1f}\n"
+            f"wrist_f={wrist_flex:.1f}, wrist_r={wrist_roll:.1f}, "
+            f"gripper={gripper:.1f}%\n"
+            f"source=MOCK"
+        )
+
+        STATE.update(base_status=base_status, arm_status=arm_status)
+        STATE.update_timestamp("base")
+        STATE.update_timestamp("arm")
+
 
 @app.get("/")
 async def index() -> HTMLResponse:
-    return HTMLResponse(INDEX_HTML)
+    return HTMLResponse(
+        INDEX_HTML,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @app.websocket("/ws")
@@ -843,13 +934,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--depth-topic", default="/zeri/top/depth/image_raw")
     parser.add_argument("--map-topic", default="/map")
 
-    parser.add_argument("--stt-topic", default="/zeri/stt/text")
+    parser.add_argument("--stt-topic", default="/stt/text")
     parser.add_argument("--vlm-decision-topic", default="/zeri/vlm/decision")
     parser.add_argument("--robot-speech-topic", default="/zeri/vlm/robot_speech")
     parser.add_argument("--inference-status-topic", default="/zeri/vlm/inference_status")
 
     parser.add_argument("--base-status-topic", default="/zeri/mobile_base/status")
     parser.add_argument("--arm-status-topic", default="/zeri/arm/status")
+
+    parser.add_argument(
+        "--mock-status",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Show temporary mock mobile-base and arm status on dashboard.",
+    )
 
     return parser
 

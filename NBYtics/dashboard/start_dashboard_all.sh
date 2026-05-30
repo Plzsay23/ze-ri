@@ -3,7 +3,7 @@ set -e
 
 source /opt/ros/humble/setup.bash
 
-ROOT="$HOME/NBYtics/dashboard"
+ROOT="$HOME/ze-ri/NBYtics/dashboard"
 cd "$ROOT"
 
 cleanup() {
