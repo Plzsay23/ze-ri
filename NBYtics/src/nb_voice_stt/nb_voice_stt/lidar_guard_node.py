@@ -9,6 +9,10 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 
+def norm_angle(angle: float) -> float:
+    return math.atan2(math.sin(angle), math.cos(angle))
+
+
 
 class LidarGuardNode(Node):
     def __init__(self):
@@ -26,6 +30,7 @@ class LidarGuardNode(Node):
         self.declare_parameter("left_max_angle_deg", 85.0)
         self.declare_parameter("right_min_angle_deg", -85.0)
         self.declare_parameter("right_max_angle_deg", -20.0)
+        self.declare_parameter("lidar_yaw_deg", 180.0)
 
         # 차폭 기반 회피 거리 설정
         self.declare_parameter("robot_width_m", 0.50)
@@ -50,6 +55,7 @@ class LidarGuardNode(Node):
         self.left_max_angle_deg = float(self.get_parameter("left_max_angle_deg").value)
         self.right_min_angle_deg = float(self.get_parameter("right_min_angle_deg").value)
         self.right_max_angle_deg = float(self.get_parameter("right_max_angle_deg").value)
+        self.lidar_yaw = math.radians(float(self.get_parameter("lidar_yaw_deg").value))
 
         self.robot_width_m = float(self.get_parameter("robot_width_m").value)
         self.avoid_margin_m = float(self.get_parameter("avoid_margin_m").value)
@@ -112,6 +118,7 @@ class LidarGuardNode(Node):
         self.get_logger().info(f"scan_topic={self.scan_topic}")
         self.get_logger().info(f"input_cmd_topic={self.input_cmd_topic}")
         self.get_logger().info(f"output_cmd_topic={self.output_cmd_topic}")
+        self.get_logger().info(f"lidar_yaw_deg={math.degrees(self.lidar_yaw):.1f}")
         self.get_logger().info("LaserScan subscriber uses BEST_EFFORT QoS")
         self.get_logger().info(
             f"robot_width_m={self.robot_width_m:.2f}, "
@@ -185,7 +192,8 @@ class LidarGuardNode(Node):
         angle = msg.angle_min
         for r in msg.ranges:
             if math.isfinite(r) and (msg.range_min <= r <= msg.range_max):
-                deg = math.degrees(angle)
+                robot_angle = norm_angle(angle + self.lidar_yaw)
+                deg = math.degrees(robot_angle)
 
                 if abs(deg) <= self.front_half_angle_deg:
                     if r < front_min:

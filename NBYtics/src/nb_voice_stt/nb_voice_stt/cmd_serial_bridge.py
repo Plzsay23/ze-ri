@@ -14,7 +14,7 @@ class CmdSerialBridge(Node):
         self.declare_parameter("baudrate", 9600)
         self.declare_parameter("input_topic", "/safe_cmd")
         self.declare_parameter("command_timeout_sec", 1.5)
-        self.declare_parameter("repeat_same_command", False)
+        self.declare_parameter("repeat_same_command", True)
 
         self.port = self.get_parameter("port").value
         self.baudrate = int(self.get_parameter("baudrate").value)
@@ -51,6 +51,8 @@ class CmdSerialBridge(Node):
             "RIGHT": "D",
             "STOP": "X",
         }
+
+        self.oneshot_commands = {"L", "M"}
 
         self.last_sent = None
         self.last_cmd_time = time.time()
@@ -90,6 +92,11 @@ class CmdSerialBridge(Node):
             return
 
         serial_cmd = self.cmd_map[ros_cmd]
+        if serial_cmd in self.oneshot_commands:
+            self.send_char(serial_cmd)
+            self.last_cmd_time = time.time()
+            return
+
 
         if (not self.repeat_same_command) and (serial_cmd == self.last_sent):
             self.last_cmd_time = time.time()

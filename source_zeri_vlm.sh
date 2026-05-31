@@ -23,7 +23,8 @@ fi
 
 VENV_SITE="$ZERI_ROOT/.venv/lib/python3.12/site-packages"
 
-export PYTHONPATH="$VENV_SITE:$NBYTICS_ROOT/src:$ZERI_ROOT/src:${PYTHONPATH:-}"
+NBYTICS_PYTHONPATH="$NBYTICS_ROOT/src/nb_voice_stt:$NBYTICS_ROOT/src/nb_odom:$NBYTICS_ROOT/src/nb_base_bridge:$NBYTICS_ROOT/src"
+export PYTHONPATH="$VENV_SITE:$NBYTICS_PYTHONPATH:$ZERI_ROOT/src:${PYTHONPATH:-}"
 
 echo "[Ze-Ri Unified]"
 echo "  ZERI_ROOT=$ZERI_ROOT"

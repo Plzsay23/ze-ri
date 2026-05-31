@@ -18,11 +18,11 @@ class VoiceDoaTurnNode(Node):
     Turn the mobile base toward the detected human voice direction.
 
     Inputs:
-      /zeri/audio/speech_vad  std_msgs/Bool
+      /zeri/audio/vad         std_msgs/Bool
       /zeri/audio/doa_deg     std_msgs/Float32
 
     Outputs:
-      /auto_cmd               std_msgs/String: A / D / X
+      /auto_cmd               std_msgs/String: A / D / W / X
       /mode_select            std_msgs/String: AUTO / STOP
 
     Existing pipeline:
@@ -38,7 +38,7 @@ class VoiceDoaTurnNode(Node):
     def __init__(self):
         super().__init__("voice_doa_turn_node")
 
-        self.declare_parameter("speech_vad_topic", "/zeri/audio/speech_vad")
+        self.declare_parameter("speech_vad_topic", "/zeri/audio/vad")
         self.declare_parameter("doa_topic", "/zeri/audio/doa_deg")
 
         self.declare_parameter("output_cmd_topic", "/auto_cmd")
@@ -64,6 +64,11 @@ class VoiceDoaTurnNode(Node):
         self.declare_parameter("left_turn_cmd", "A")
         self.declare_parameter("right_turn_cmd", "D")
         self.declare_parameter("stop_cmd", "X")
+        self.declare_parameter("forward_cmd", "W")
+        self.declare_parameter("turn_start_deadband_deg", 18.0)
+        self.declare_parameter("turn_stop_deadband_deg", 8.0)
+        self.declare_parameter("forward_hold_sec", 4.0)
+        self.declare_parameter("smoothing_alpha", 0.35)
 
         # DOA 각도 증가 방향이 로봇 기준 좌우와 반대면 true.
         self.declare_parameter("invert_direction", False)
@@ -85,12 +90,23 @@ class VoiceDoaTurnNode(Node):
         self.left_turn_cmd = str(self.get_parameter("left_turn_cmd").value).strip().upper()
         self.right_turn_cmd = str(self.get_parameter("right_turn_cmd").value).strip().upper()
         self.stop_cmd = str(self.get_parameter("stop_cmd").value).strip().upper()
+        self.forward_cmd = str(self.get_parameter("forward_cmd").value).strip().upper()
+        self.turn_start_deadband_deg = float(self.get_parameter("turn_start_deadband_deg").value)
+        self.turn_stop_deadband_deg = float(self.get_parameter("turn_stop_deadband_deg").value)
+        self.forward_hold_sec = float(self.get_parameter("forward_hold_sec").value)
+        self.smoothing_alpha = float(self.get_parameter("smoothing_alpha").value)
 
         self.invert_direction = bool(self.get_parameter("invert_direction").value)
         self.manage_mode = bool(self.get_parameter("manage_mode").value)
 
         if self.publish_rate_hz <= 0.0:
             self.publish_rate_hz = 8.0
+
+        self.turn_start_deadband_deg = max(self.turn_start_deadband_deg, self.deadband_deg)
+        self.turn_stop_deadband_deg = min(self.turn_stop_deadband_deg, self.deadband_deg)
+        self.turn_stop_deadband_deg = max(1.0, self.turn_stop_deadband_deg)
+        self.forward_hold_sec = max(0.0, self.forward_hold_sec)
+        self.smoothing_alpha = min(1.0, max(0.0, self.smoothing_alpha))
 
         self.latest_speech_vad = False
         self.latest_doa: Optional[float] = None
@@ -100,6 +116,9 @@ class VoiceDoaTurnNode(Node):
         self.last_doa_time = 0.0
         self.last_cmd: Optional[str] = None
         self.auto_mode_active = False
+        self.smoothed_error: Optional[float] = None
+        self.turn_cmd: Optional[str] = None
+        self.last_aligned_time = 0.0
         self.last_log_time = now
 
         self.cmd_pub = self.create_publisher(String, self.output_cmd_topic, 10)
@@ -136,7 +155,8 @@ class VoiceDoaTurnNode(Node):
         )
         self.get_logger().info(
             f"left_turn_cmd={self.left_turn_cmd}, "
-            f"right_turn_cmd={self.right_turn_cmd}, stop_cmd={self.stop_cmd}"
+            f"right_turn_cmd={self.right_turn_cmd}, forward_cmd={self.forward_cmd}, "
+            f"stop_cmd={self.stop_cmd}, forward_hold_sec={self.forward_hold_sec:.1f}"
         )
 
     def speech_callback(self, msg: Bool):
@@ -167,6 +187,9 @@ class VoiceDoaTurnNode(Node):
 
     def stop(self):
         self.publish_cmd(self.stop_cmd)
+        self.turn_cmd = None
+        self.smoothed_error = None
+        self.last_aligned_time = 0.0
         if self.auto_mode_active:
             self.publish_mode("STOP")
             self.auto_mode_active = False
@@ -180,13 +203,15 @@ class VoiceDoaTurnNode(Node):
     def timer_callback(self):
         now = time.monotonic()
 
-        active = self.speech_is_active(now) and self.doa_is_fresh(now)
+        tracking_active = self.speech_is_active(now) and self.doa_is_fresh(now)
+        forward_hold_active = (now - self.last_aligned_time) <= self.forward_hold_sec
+        command_active = tracking_active or forward_hold_active
 
         active_msg = Bool()
-        active_msg.data = bool(active)
+        active_msg.data = bool(command_active)
         self.debug_active_pub.publish(active_msg)
 
-        if not active:
+        if not command_active:
             self.stop()
             return
 
@@ -194,40 +219,63 @@ class VoiceDoaTurnNode(Node):
             self.publish_mode("AUTO")
             self.auto_mode_active = True
 
-        assert self.latest_doa is not None
+        cmd = self.forward_cmd
+        error_for_log = None
 
-        error = wrap_deg(self.latest_doa - self.front_deg)
+        if tracking_active:
+            assert self.latest_doa is not None
 
-        error_msg = Float32()
-        error_msg.data = float(error)
-        self.debug_error_pub.publish(error_msg)
-
-        if abs(error) <= self.deadband_deg:
-            cmd = self.stop_cmd
-        else:
-            # 기본 가정:
-            #   error > 0  => 오른쪽 방향
-            #   error < 0  => 왼쪽 방향
-            # 실제 로봇에서 반대로 돌면 invert_direction:=true 로 실행.
-            if error > 0.0:
-                cmd = self.right_turn_cmd
+            raw_error = wrap_deg(self.latest_doa - self.front_deg)
+            if self.smoothed_error is None:
+                self.smoothed_error = raw_error
             else:
-                cmd = self.left_turn_cmd
+                delta = wrap_deg(raw_error - self.smoothed_error)
+                self.smoothed_error = wrap_deg(self.smoothed_error + self.smoothing_alpha * delta)
 
-            if self.invert_direction:
-                if cmd == self.right_turn_cmd:
-                    cmd = self.left_turn_cmd
-                elif cmd == self.left_turn_cmd:
+            error = self.smoothed_error
+            error_for_log = error
+
+            error_msg = Float32()
+            error_msg.data = float(error)
+            self.debug_error_pub.publish(error_msg)
+
+            if abs(error) <= self.turn_stop_deadband_deg:
+                cmd = self.forward_cmd
+                self.turn_cmd = None
+                self.last_aligned_time = now
+            elif self.turn_cmd is not None and abs(error) < self.turn_start_deadband_deg:
+                self.last_aligned_time = 0.0
+                cmd = self.turn_cmd
+            else:
+                if error > 0.0:
                     cmd = self.right_turn_cmd
+                else:
+                    cmd = self.left_turn_cmd
+
+                if self.invert_direction:
+                    if cmd == self.right_turn_cmd:
+                        cmd = self.left_turn_cmd
+                    elif cmd == self.left_turn_cmd:
+                        cmd = self.right_turn_cmd
+
+                self.last_aligned_time = 0.0
+                self.turn_cmd = cmd
+        else:
+            cmd = self.forward_cmd
 
         self.publish_cmd(cmd)
 
         if now - self.last_log_time > 0.8:
             self.last_log_time = now
-            self.get_logger().info(
-                f"doa={self.latest_doa:.1f}, front={self.front_deg:.1f}, "
-                f"error={error:.1f}, cmd={cmd}, active={active}"
-            )
+            if error_for_log is None:
+                self.get_logger().info(
+                    f"voice target hold -> cmd={cmd}, active={command_active}"
+                )
+            else:
+                self.get_logger().info(
+                    f"doa={self.latest_doa:.1f}, front={self.front_deg:.1f}, "
+                    f"error={error_for_log:.1f}, cmd={cmd}, active={command_active}"
+                )
 
     def destroy_node(self):
         try:

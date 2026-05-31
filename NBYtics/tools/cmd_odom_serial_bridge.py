@@ -60,7 +60,7 @@ class CmdOdomSerialBridge(Node):
 
         self.cmd_map = {
             "W": "W", "A": "A", "S": "S", "D": "D", "X": "X",
-            "Q": "Q", "E": "E", "L": "L", "M": "M",
+            "Q": "Q", "E": "E", "R": "R", "T": "T", "F": "F", "G": "G", "L": "L", "M": "M",
             "FORWARD": "W", "BACKWARD": "S",
             "LEFT": "A", "RIGHT": "D", "STOP": "X",
         }
@@ -69,6 +69,8 @@ class CmdOdomSerialBridge(Node):
         self.last_input_time = time.time()
         self.last_logged_cmd = None
         self.lock = threading.Lock()
+        self.serial_lock = threading.Lock()
+        self.oneshot_commands = {"L", "M"}
 
         self.x = 0.0
         self.y = 0.0
@@ -99,10 +101,35 @@ class CmdOdomSerialBridge(Node):
             f"invert_vy={self.invert_vy}, invert_wz={self.invert_wz}"
         )
 
+    def send_serial_cmd(self, cmd: str):
+        try:
+            payload = cmd + ("\n" if self.append_newline else "")
+            with self.serial_lock:
+                self.ser.write(payload.encode("utf-8"))
+                self.ser.flush()
+
+            tx = String()
+            tx.data = cmd
+            self.tx_pub.publish(tx)
+
+            if cmd != self.last_logged_cmd:
+                self.get_logger().info(f"serial cmd -> {cmd}")
+                self.last_logged_cmd = cmd
+
+        except Exception as e:
+            self.get_logger().error(f"serial write failed: {e}")
+
+
     def cmd_callback(self, msg: String):
         key = msg.data.strip().upper()
         if key not in self.cmd_map:
             self.get_logger().warn(f"unknown cmd: {msg.data}")
+            return
+
+        serial_cmd = self.cmd_map[key]
+        if serial_cmd in self.oneshot_commands:
+            self.send_serial_cmd(serial_cmd)
+            self.last_input_time = time.time()
             return
 
         with self.lock:
