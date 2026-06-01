@@ -1,6 +1,6 @@
 #include <Encoder.h>
 
-// ===== 모터 핀 정의 =====
+// ===== 모터 핀 정의: 네가 확인한 정상 동작 핀 기준 =====
 #define PWMA 4
 #define DIRA1 A5
 #define DIRA2 A4
@@ -18,32 +18,24 @@
 #define DIRD2 36
 
 // ===== Encoder 핀 =====
+// 실제 확인된 encoder 커넥터 기준
 Encoder encA(18, 31);   // 실제 RF
 Encoder encB(19, 38);   // 실제 LF, 부호 반대
 Encoder encC(3, 49);    // 실제 RR
 Encoder encD(2, A1);    // 실제 LR, 부호 반대
 
 // ===== 속도 설정 =====
-// 기존 30은 Linux/Python 테스트에서 너무 약할 수 있으므로 일단 180으로 고정
-int Motor_PWM = 180;
+int Motor_PWM = 30;
 
 // encoder 출력 주기
 const unsigned long ENC_PERIOD_MS = 100;
 unsigned long lastEncMs = 0;
 
-// 명령 timeout
+// 명령 timeout: 키 입력 끊기면 자동 정지
 const unsigned long CMD_TIMEOUT_MS = 800;
 unsigned long lastCmdMs = 0;
 
-// ===== ROS Twist 명령용 설정 =====
-const float MAX_LINEAR_X = 0.30;
-const float MAX_LINEAR_Y = 0.30;
-const float MAX_ANGULAR_Z = 1.50;
-
-const int MIN_ACTIVE_PWM = 60;
-const int MAX_CMD_PWM = 180;
-
-// ===== 모터 제어 매크로 =====
+// ===== 모터 제어 매크로: 네 기존 코드 그대로 =====
 #define MOTORA_FORWARD(pwm)    do{digitalWrite(DIRA1,HIGH); digitalWrite(DIRA2,LOW);  analogWrite(PWMA,pwm);}while(0)
 #define MOTORA_BACKOFF(pwm)    do{digitalWrite(DIRA1,LOW);  digitalWrite(DIRA2,HIGH); analogWrite(PWMA,pwm);}while(0)
 #define MOTORA_STOP()          do{digitalWrite(DIRA1,LOW);  digitalWrite(DIRA2,LOW);  analogWrite(PWMA,0);}while(0)
@@ -82,6 +74,7 @@ void stopMotors() {
   MOTORD_STOP();
 }
 
+// ===== 회전 =====
 void turnLeft() {
   MOTORA_BACKOFF(Motor_PWM);
   MOTORB_FORWARD(Motor_PWM);
@@ -96,6 +89,7 @@ void turnRight() {
   MOTORD_BACKOFF(Motor_PWM);
 }
 
+// ===== 메카넘 평행이동 =====
 void strafeLeft() {
   MOTORA_BACKOFF(Motor_PWM);
   MOTORB_FORWARD(Motor_PWM);
@@ -110,6 +104,7 @@ void strafeRight() {
   MOTORD_FORWARD(Motor_PWM);
 }
 
+// ===== 대각선 =====
 void diagFrontLeft() {
   MOTORA_STOP();
   MOTORB_FORWARD(Motor_PWM);
@@ -139,6 +134,7 @@ void diagBackRight() {
 }
 
 // ===== Encoder 출력 =====
+// 최종 출력: ENC LF RF LR RR
 void publishEncoder() {
   long rawA = encA.read();     // 실제 RF
   long rawB = -encB.read();    // 실제 LF
@@ -160,139 +156,9 @@ void publishEncoder() {
   Serial.println(rr);
 }
 
-// ===== ROS Twist 형식 처리 =====
-// 입력 예: V 0.100 0.000 0.000
-int velocityToPwm(float value) {
-  float a = fabs(value);
-
-  if (a < 0.03) {
-    return 0;
-  }
-
-  int pwm = (int)(a * MAX_CMD_PWM);
-
-  if (pwm > 0 && pwm < MIN_ACTIVE_PWM) {
-    pwm = MIN_ACTIVE_PWM;
-  }
-
-  if (pwm > MAX_CMD_PWM) {
-    pwm = MAX_CMD_PWM;
-  }
-
-  return pwm;
-}
-
-void driveMotorA(float value) {
-  int pwm = velocityToPwm(value);
-
-  if (pwm == 0) {
-    MOTORA_STOP();
-  } else if (value > 0.0) {
-    MOTORA_FORWARD(pwm);
-  } else {
-    MOTORA_BACKOFF(pwm);
-  }
-}
-
-void driveMotorB(float value) {
-  int pwm = velocityToPwm(value);
-
-  if (pwm == 0) {
-    MOTORB_STOP();
-  } else if (value > 0.0) {
-    MOTORB_FORWARD(pwm);
-  } else {
-    MOTORB_BACKOFF(pwm);
-  }
-}
-
-void driveMotorC(float value) {
-  int pwm = velocityToPwm(value);
-
-  if (pwm == 0) {
-    MOTORC_STOP();
-  } else if (value > 0.0) {
-    MOTORC_FORWARD(pwm);
-  } else {
-    MOTORC_BACKOFF(pwm);
-  }
-}
-
-void driveMotorD(float value) {
-  int pwm = velocityToPwm(value);
-
-  if (pwm == 0) {
-    MOTORD_STOP();
-  } else if (value > 0.0) {
-    MOTORD_FORWARD(pwm);
-  } else {
-    MOTORD_BACKOFF(pwm);
-  }
-}
-
-void driveMecanum(float vx, float vy, float wz) {
-  float nx = vx / MAX_LINEAR_X;
-  float ny = vy / MAX_LINEAR_Y;
-  float nw = wz / MAX_ANGULAR_Z;
-
-  nx = constrain(nx, -1.0, 1.0);
-  ny = constrain(ny, -1.0, 1.0);
-  nw = constrain(nw, -1.0, 1.0);
-
-  // A = RF
-  // B = LF
-  // C = RR
-  // D = LR
-  float lf = nx + ny + nw;
-  float rf = nx - ny - nw;
-  float lr = nx - ny + nw;
-  float rr = nx + ny - nw;
-
-  float maxAbs = max(max(fabs(lf), fabs(rf)), max(fabs(lr), fabs(rr)));
-
-  if (maxAbs > 1.0) {
-    lf /= maxAbs;
-    rf /= maxAbs;
-    lr /= maxAbs;
-    rr /= maxAbs;
-  }
-
-  driveMotorA(rf);
-  driveMotorB(lf);
-  driveMotorC(rr);
-  driveMotorD(lr);
-}
-
-void handleVelocityLine(char *line) {
-  float vx = 0.0;
-  float vy = 0.0;
-  float wz = 0.0;
-
-  int matched = sscanf(line, "V %f %f %f", &vx, &vy, &wz);
-
-  Serial.print("RX_V matched=");
-  Serial.print(matched);
-  Serial.print(" vx=");
-  Serial.print(vx, 3);
-  Serial.print(" vy=");
-  Serial.print(vy, 3);
-  Serial.print(" wz=");
-  Serial.println(wz, 3);
-
-  if (matched == 3) {
-    driveMecanum(vx, vy, wz);
-    lastCmdMs = millis();
-  }
-}
-
-// ===== 문자 명령 처리 =====
+// ===== 명령 처리 =====
 void handleCommand(char cmd) {
   if (cmd == '\n' || cmd == '\r') return;
-
-  Serial.print("RX_CHAR ");
-  Serial.print(cmd);
-  Serial.print(" PWM=");
-  Serial.println(Motor_PWM);
 
   switch (cmd) {
     case 'w': case 'W':
@@ -347,28 +213,16 @@ void handleCommand(char cmd) {
 
     case 'x': case 'X':
       stopMotors();
-      lastCmdMs = millis();
       break;
 
     case 'l': case 'L':
       Motor_PWM += 10;
       if (Motor_PWM > 255) Motor_PWM = 255;
-      lastCmdMs = millis();
-      Serial.print("PWM_UP ");
-      Serial.println(Motor_PWM);
       break;
 
     case 'm': case 'M':
       Motor_PWM -= 10;
       if (Motor_PWM < 0) Motor_PWM = 0;
-      lastCmdMs = millis();
-      Serial.print("PWM_DOWN ");
-      Serial.println(Motor_PWM);
-      break;
-
-    default:
-      Serial.print("UNKNOWN_CMD ");
-      Serial.println(cmd);
       break;
   }
 }
@@ -398,47 +252,25 @@ void setup() {
   lastCmdMs = millis();
   lastEncMs = millis();
 
-  Serial.println("READY TELEOP_DEBUG_ROS_TWIST");
+  Serial.println("READY TELEOP_WITH_ENCODER");
   Serial.println("FORMAT: ENC LF RF LR RR");
-  Serial.println("CMD: w/s/a/d/q/e/x/l/m or V vx vy wz");
 }
 
 // ===== 메인 루프 =====
 void loop() {
   unsigned long now = millis();
 
-  static char lineBuf[80];
-  static int lineIndex = 0;
-
   while (Serial.available()) {
-    char c = Serial.read();
-
-    if (c == '\n' || c == '\r') {
-      if (lineIndex > 0) {
-        lineBuf[lineIndex] = '\0';
-
-        if (lineBuf[0] == 'V') {
-          handleVelocityLine(lineBuf);
-        } else {
-          handleCommand(lineBuf[0]);
-        }
-
-        lineIndex = 0;
-      }
-    } else {
-      if (lineIndex < 79) {
-        lineBuf[lineIndex++] = c;
-      } else {
-        lineIndex = 0;
-        Serial.println("LINE_OVERFLOW");
-      }
-    }
+    char cmd = Serial.read();
+    handleCommand(cmd);
   }
 
+  // 명령 끊기면 자동 정지
   if (now - lastCmdMs > CMD_TIMEOUT_MS) {
     stopMotors();
   }
 
+  // encoder 출력
   if (now - lastEncMs >= ENC_PERIOD_MS) {
     lastEncMs = now;
     publishEncoder();
