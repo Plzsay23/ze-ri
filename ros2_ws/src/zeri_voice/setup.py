@@ -21,6 +21,7 @@ setup(
         'console_scripts': [
             'respeaker_vad_doa_node = zeri_voice.respeaker_vad_doa_node:main',
             'voice_follow_cmd_node = zeri_voice.voice_follow_cmd_node:main',
+            'voice_stop_guard_node = zeri_voice.voice_stop_guard_node:main',
         ],
     },
 )

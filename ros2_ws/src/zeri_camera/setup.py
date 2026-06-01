@@ -15,11 +15,12 @@ setup(
     zip_safe=True,
     maintainer='zeri',
     maintainer_email='zeri@example.com',
-    description='Ze-Ri RealSense RGB-D publisher',
+    description='Ze-Ri camera publisher and camera-follow nodes',
     license='MIT',
     entry_points={
         'console_scripts': [
             'realsense_rgbd_node = zeri_camera.realsense_rgbd_node:main',
+            'camera_depth_follow_node = zeri_camera.camera_depth_follow_node:main',
         ],
     },
 )
