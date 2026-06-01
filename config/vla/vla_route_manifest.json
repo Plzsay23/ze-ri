@@ -1,30 +1,30 @@
 {
   "routes": {
+    "pen_and_cup_left": {
+      "arm": "left",
+      "policy_id": "pen_and_cup",
+      "task": "Pick up the pen and place it in the cup.",
+      "duration_sec": 20.0,
+      "timeout_sec": 60.0
+    },
+    "pen_and_cup_right": {
+      "arm": "right",
+      "policy_id": "pen_and_cup",
+      "task": "Pick up the pen and place it in the cup.",
+      "duration_sec": 20.0,
+      "timeout_sec": 60.0
+    },
     "oxygen_mask_delivery": {
       "arm": "left",
-      "policy_id": "black_act",
-      "task": "Deliver the oxygen mask to the person.",
+      "policy_id": "pen_and_cup",
+      "task": "Pick up the pen and place it in the cup.",
       "duration_sec": 20.0,
       "timeout_sec": 60.0
     },
     "radio_delivery": {
       "arm": "right",
-      "policy_id": "blue_act",
-      "task": "Deliver the radio device to the person.",
-      "duration_sec": 20.0,
-      "timeout_sec": 60.0
-    },
-    "black_act": {
-      "arm": "left",
-      "policy_id": "black_act",
-      "task": "Execute black_act.",
-      "duration_sec": 20.0,
-      "timeout_sec": 60.0
-    },
-    "blue_act": {
-      "arm": "right",
-      "policy_id": "blue_act",
-      "task": "Execute blue_act.",
+      "policy_id": "pen_and_cup",
+      "task": "Pick up the pen and place it in the cup.",
       "duration_sec": 20.0,
       "timeout_sec": 60.0
     }

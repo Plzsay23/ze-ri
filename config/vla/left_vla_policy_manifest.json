@@ -1,11 +1,11 @@
 {
-  "default_policy_id": "black_act",
+  "default_policy_id": "pen_and_cup",
   "policies": [
     {
-      "id": "black_act",
+      "id": "pen_and_cup",
       "policy_type": "act",
-      "pretrained_name_or_path": "plzsay/black_act",
-      "description": "Left-arm black ACT policy."
+      "pretrained_name_or_path": "plzsay/pen_and_cup",
+      "description": "Single-arm ACT policy using one camera key named top."
     }
   ]
 }
