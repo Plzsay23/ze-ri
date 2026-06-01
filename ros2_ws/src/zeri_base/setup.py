@@ -25,6 +25,9 @@ setup(
     entry_points={
         'console_scripts': [
             'cmd_vel_serial_node = zeri_base.cmd_vel_serial_node:main',
+            'cmd_vel_safety_node = zeri_base.cmd_vel_safety_node:main',
+            'cmd_vel_key_serial_node = zeri_base.cmd_vel_key_serial_node:main',
+            'base_key_odom_serial_node = zeri_base.base_key_odom_serial_node:main',
         ],
     },
 )

@@ -13,17 +13,16 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='hansungai',
-    maintainer_email='yjhanna3@hansung.ac.kr',
-    description='TODO: Package description',
-    license='TODO: License declaration',
-    extras_require={
-        'test': [
-            'pytest',
-        ],
-    },
+    maintainer='zeri',
+    maintainer_email='zeri@example.com',
+    description='Ze-Ri LiDAR ROS2 package',
+    license='TODO',
+    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'scan_front_filter_node = zeri_lidar.scan_front_filter_node:main',
+            'lidar_guard_node = zeri_lidar.lidar_guard_node:main',
+            'lidar_depth_guard_node = zeri_lidar.lidar_depth_guard_node:main',
         ],
     },
 )

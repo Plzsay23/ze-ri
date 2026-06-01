@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'zeri_voice'
+package_name = 'zeri_camera'
 
 setup(
     name=package_name,
@@ -15,12 +15,11 @@ setup(
     zip_safe=True,
     maintainer='zeri',
     maintainer_email='zeri@example.com',
-    description='Ze-Ri voice VAD/DOA and voice-follow driving nodes',
+    description='Ze-Ri RealSense RGB-D publisher',
     license='MIT',
     entry_points={
         'console_scripts': [
-            'respeaker_vad_doa_node = zeri_voice.respeaker_vad_doa_node:main',
-            'voice_follow_cmd_node = zeri_voice.voice_follow_cmd_node:main',
+            'realsense_rgbd_node = zeri_camera.realsense_rgbd_node:main',
         ],
     },
 )
