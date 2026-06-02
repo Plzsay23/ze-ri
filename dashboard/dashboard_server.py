@@ -16,10 +16,11 @@ import rclpy
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
-from nav_msgs.msg import OccupancyGrid
+from geometry_msgs.msg import Twist
+from nav_msgs.msg import OccupancyGrid, Odometry
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, LaserScan, PointCloud2
 from std_msgs.msg import String
 
 
@@ -28,7 +29,7 @@ INDEX_HTML = r"""
 <html lang="ko">
 <head>
   <meta charset="utf-8" />
-  <title>Ze-Ri ROS2 VLM Dashboard</title>
+  <title>Ze-Ri ROS2 Autonomy / VLA Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <style>
@@ -178,6 +179,41 @@ INDEX_HTML = r"""
       background: var(--dark-panel);
     }
 
+    .pointcloud-wrap {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      background: #020617;
+      overflow: hidden;
+      touch-action: none;
+    }
+
+    .pointcloud-wrap canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      background: radial-gradient(circle at center, #0f172a 0%, #020617 68%);
+      cursor: grab;
+    }
+
+    .pointcloud-wrap canvas.dragging {
+      cursor: grabbing;
+    }
+
+    .viewer-hint {
+      position: absolute;
+      left: 10px;
+      bottom: 8px;
+      padding: 5px 7px;
+      border-radius: 6px;
+      background: rgba(2, 6, 23, 0.72);
+      color: #bfdbfe;
+      font-size: 10px;
+      font-weight: 800;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+
     .placeholder {
       color: #bfdbfe;
       font-size: 20px;
@@ -233,12 +269,20 @@ INDEX_HTML = r"""
     }
 
     .status-line {
-      min-height: 100%;
       padding: 8px;
       border-radius: 8px;
       background: rgba(255, 255, 255, 0.13);
       border: 1px solid rgba(255, 255, 255, 0.18);
       overflow: auto;
+      margin-bottom: 7px;
+    }
+
+    .status-line:last-child {
+      margin-bottom: 0;
+    }
+
+    .status-line.compact-line {
+      min-height: 0;
     }
 
     .status-line .label {
@@ -288,7 +332,7 @@ INDEX_HTML = r"""
 
 <body>
   <header>
-    <div class="title">Ze-Ri ROS2 VLM Dashboard</div>
+    <div class="title">Ze-Ri ROS2 Autonomy / VLA Dashboard</div>
     <div class="status">
       <span><span id="ws-dot" class="dot"></span> <span id="ws-state">DISCONNECTED</span></span>
       <span>|</span>
@@ -310,12 +354,15 @@ INDEX_HTML = r"""
 
     <section class="card depth-card">
       <div class="card-title">
-        <span>Depth 채널</span>
+        <span>3D Map / PointCloud</span>
         <small id="depth-ts">대기중</small>
       </div>
       <div class="media-wrap">
-        <img id="depth-img" alt="Depth Stream" style="display:none" />
-        <div id="depth-placeholder" class="placeholder">Depth 데이터 대기중</div>
+        <div class="pointcloud-wrap">
+          <canvas id="pointcloud-canvas"></canvas>
+          <div id="pointcloud-placeholder" class="placeholder">PointCloud 데이터 대기중</div>
+          <div class="viewer-hint">좌클릭 회전 · 우클릭 이동 · 휠 줌</div>
+        </div>
       </div>
     </section>
 
@@ -365,25 +412,49 @@ INDEX_HTML = r"""
 
     <section class="card base-card">
       <div class="card-title">
-        <span>모바일 베이스 상태</span>
+        <span>자율주행 / 베이스 상태</span>
         <small id="base-ts">대기중</small>
       </div>
       <div class="status-big">
         <div class="status-line">
-          <div class="label">상태 / 명령</div>
-          <div id="base-status" class="value">데이터 대기중</div>
+          <div class="label">Person Follow</div>
+          <div id="person-follow-state" class="value">데이터 대기중</div>
+        </div>
+        <div class="status-line compact-line">
+          <div class="label">LiDAR + Depth Safety Guard</div>
+          <div id="safety-guard-state" class="value">데이터 대기중</div>
+        </div>
+        <div class="status-line compact-line">
+          <div class="label">cmd_vel_raw → cmd_vel</div>
+          <div id="cmd-state" class="value">데이터 대기중</div>
+        </div>
+        <div class="status-line compact-line">
+          <div class="label">Scan / Odom</div>
+          <div id="nav-state" class="value">데이터 대기중</div>
         </div>
       </div>
     </section>
 
     <section class="card arm-card">
       <div class="card-title">
-        <span>로봇팔 상태</span>
+        <span>VLA / 로봇팔 상태</span>
         <small id="arm-ts">대기중</small>
       </div>
       <div class="status-big">
         <div class="status-line">
-          <div class="label">상태</div>
+          <div class="label">VLA Router</div>
+          <div id="vla-status" class="value">데이터 대기중</div>
+        </div>
+        <div class="status-line compact-line">
+          <div class="label">Left Arm</div>
+          <div id="vla-left-status" class="value">데이터 대기중</div>
+        </div>
+        <div class="status-line compact-line">
+          <div class="label">Right Arm</div>
+          <div id="vla-right-status" class="value">데이터 대기중</div>
+        </div>
+        <div class="status-line compact-line">
+          <div class="label">Last Task Request / Legacy Arm Status</div>
           <div id="arm-status" class="value">데이터 대기중</div>
         </div>
       </div>
@@ -423,17 +494,282 @@ INDEX_HTML = r"""
       return String(v);
     }
 
+    const pcViewer = {
+      canvas: null,
+      gl: null,
+      program: null,
+      posBuffer: null,
+      colorBuffer: null,
+      pointCount: 0,
+      yaw: 0.0,
+      pitch: -0.35,
+      distance: 2.4,
+      targetX: 0.0,
+      targetY: 0.0,
+      targetZ: -1.0,
+      dragging: false,
+      dragButton: 0,
+      lastX: 0,
+      lastY: 0,
+    };
+
+    function mat4Perspective(fovy, aspect, near, far) {
+      const f = 1.0 / Math.tan(fovy / 2.0);
+      const nf = 1.0 / (near - far);
+      return new Float32Array([
+        f / aspect, 0, 0, 0,
+        0, f, 0, 0,
+        0, 0, (far + near) * nf, -1,
+        0, 0, 2 * far * near * nf, 0,
+      ]);
+    }
+
+    function normalize(v) {
+      const n = Math.hypot(v[0], v[1], v[2]) || 1.0;
+      return [v[0] / n, v[1] / n, v[2] / n];
+    }
+
+    function cross(a, b) {
+      return [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+      ];
+    }
+
+    function dot(a, b) {
+      return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    }
+
+    function mat4LookAt(eye, target, up) {
+      const z = normalize([eye[0] - target[0], eye[1] - target[1], eye[2] - target[2]]);
+      const x = normalize(cross(up, z));
+      const y = cross(z, x);
+      return new Float32Array([
+        x[0], y[0], z[0], 0,
+        x[1], y[1], z[1], 0,
+        x[2], y[2], z[2], 0,
+        -dot(x, eye), -dot(y, eye), -dot(z, eye), 1,
+      ]);
+    }
+
+    function mat4Multiply(a, b) {
+      const out = new Float32Array(16);
+      for (let col = 0; col < 4; col++) {
+        for (let row = 0; row < 4; row++) {
+          out[col * 4 + row] =
+            a[0 * 4 + row] * b[col * 4 + 0] +
+            a[1 * 4 + row] * b[col * 4 + 1] +
+            a[2 * 4 + row] * b[col * 4 + 2] +
+            a[3 * 4 + row] * b[col * 4 + 3];
+        }
+      }
+      return out;
+    }
+
+    function makeShader(gl, type, source) {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        throw new Error(gl.getShaderInfoLog(shader) || "shader compile failed");
+      }
+      return shader;
+    }
+
+    function initPointCloudViewer() {
+      const canvas = $("pointcloud-canvas");
+      const gl = canvas.getContext("webgl", {
+        antialias: true,
+        preserveDrawingBuffer: false,
+      });
+
+      if (!gl) {
+        $("pointcloud-placeholder").textContent = "이 브라우저는 WebGL을 지원하지 않습니다";
+        return;
+      }
+
+      const vs = `
+        attribute vec3 a_position;
+        attribute vec3 a_color;
+        uniform mat4 u_matrix;
+        varying vec3 v_color;
+        void main() {
+          gl_Position = u_matrix * vec4(a_position, 1.0);
+          gl_PointSize = 2.2;
+          v_color = a_color;
+        }
+      `;
+
+      const fs = `
+        precision mediump float;
+        varying vec3 v_color;
+        void main() {
+          vec2 p = gl_PointCoord - vec2(0.5, 0.5);
+          if (dot(p, p) > 0.25) discard;
+          gl_FragColor = vec4(v_color, 1.0);
+        }
+      `;
+
+      const program = gl.createProgram();
+      gl.attachShader(program, makeShader(gl, gl.VERTEX_SHADER, vs));
+      gl.attachShader(program, makeShader(gl, gl.FRAGMENT_SHADER, fs));
+      gl.linkProgram(program);
+
+      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        throw new Error(gl.getProgramInfoLog(program) || "program link failed");
+      }
+
+      pcViewer.canvas = canvas;
+      pcViewer.gl = gl;
+      pcViewer.program = program;
+      pcViewer.posBuffer = gl.createBuffer();
+      pcViewer.colorBuffer = gl.createBuffer();
+
+      canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+      canvas.addEventListener("mousedown", (e) => {
+        pcViewer.dragging = true;
+        pcViewer.dragButton = e.button;
+        pcViewer.lastX = e.clientX;
+        pcViewer.lastY = e.clientY;
+        canvas.classList.add("dragging");
+      });
+
+      window.addEventListener("mouseup", () => {
+        pcViewer.dragging = false;
+        canvas.classList.remove("dragging");
+      });
+
+      window.addEventListener("mousemove", (e) => {
+        if (!pcViewer.dragging) return;
+
+        const dx = e.clientX - pcViewer.lastX;
+        const dy = e.clientY - pcViewer.lastY;
+        pcViewer.lastX = e.clientX;
+        pcViewer.lastY = e.clientY;
+
+        if (pcViewer.dragButton === 2) {
+          const panScale = pcViewer.distance * 0.0016;
+          pcViewer.targetX -= dx * panScale;
+          pcViewer.targetY += dy * panScale;
+        } else {
+          pcViewer.yaw += dx * 0.006;
+          pcViewer.pitch += dy * 0.006;
+          pcViewer.pitch = Math.max(-1.45, Math.min(1.45, pcViewer.pitch));
+        }
+      });
+
+      canvas.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        const scale = Math.exp(e.deltaY * 0.001);
+        pcViewer.distance = Math.max(0.25, Math.min(12.0, pcViewer.distance * scale));
+      }, { passive: false });
+
+      requestAnimationFrame(renderPointCloud);
+    }
+
+    function updatePointCloudViewer(payload) {
+      if (!payload || !payload.points || !payload.colors || !pcViewer.gl) return;
+
+      const gl = pcViewer.gl;
+      const points = new Float32Array(payload.points);
+      const colors = new Float32Array(payload.colors);
+
+      pcViewer.pointCount = Math.floor(points.length / 3);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, pcViewer.posBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, points, gl.DYNAMIC_DRAW);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, pcViewer.colorBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, colors, gl.DYNAMIC_DRAW);
+
+      const ph = $("pointcloud-placeholder");
+      if (pcViewer.pointCount > 0) {
+        ph.style.display = "none";
+      } else {
+        ph.style.display = "block";
+      }
+    }
+
+    function renderPointCloud() {
+      const gl = pcViewer.gl;
+      const canvas = pcViewer.canvas;
+
+      if (!gl || !canvas) {
+        requestAnimationFrame(renderPointCloud);
+        return;
+      }
+
+      const w = canvas.clientWidth || 1;
+      const h = canvas.clientHeight || 1;
+
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      gl.clearColor(0.008, 0.024, 0.070, 1.0);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      gl.enable(gl.DEPTH_TEST);
+
+      if (pcViewer.pointCount > 0) {
+        const aspect = canvas.width / Math.max(1, canvas.height);
+        const proj = mat4Perspective(Math.PI / 4.0, aspect, 0.03, 30.0);
+
+        const cp = Math.cos(pcViewer.pitch);
+        const sp = Math.sin(pcViewer.pitch);
+        const sy = Math.sin(pcViewer.yaw);
+        const cy = Math.cos(pcViewer.yaw);
+
+        const target = [pcViewer.targetX, pcViewer.targetY, pcViewer.targetZ];
+        const eye = [
+          target[0] + pcViewer.distance * sy * cp,
+          target[1] + pcViewer.distance * sp,
+          target[2] + pcViewer.distance * cy * cp,
+        ];
+
+        const view = mat4LookAt(eye, target, [0, 1, 0]);
+        const matrix = mat4Multiply(proj, view);
+
+        gl.useProgram(pcViewer.program);
+
+        const aPos = gl.getAttribLocation(pcViewer.program, "a_position");
+        const aColor = gl.getAttribLocation(pcViewer.program, "a_color");
+        const uMatrix = gl.getUniformLocation(pcViewer.program, "u_matrix");
+
+        gl.uniformMatrix4fv(uMatrix, false, matrix);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, pcViewer.posBuffer);
+        gl.enableVertexAttribArray(aPos);
+        gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, pcViewer.colorBuffer);
+        gl.enableVertexAttribArray(aColor);
+        gl.vertexAttribPointer(aColor, 3, gl.FLOAT, false, 0, 0);
+
+        gl.drawArrays(gl.POINTS, 0, pcViewer.pointCount);
+      }
+
+      requestAnimationFrame(renderPointCloud);
+    }
+
     function updateDashboard(data) {
       setImg("rgb-img", "rgb-placeholder", data.rgb_image);
-      setImg("depth-img", "depth-placeholder", data.depth_image);
+      updatePointCloudViewer(data.point_cloud);
       setImg("map-img", "map-placeholder", data.map_image);
 
       $("rgb-ts").textContent = fmtTs(data.timestamps?.rgb, data.counts?.rgb);
-      $("depth-ts").textContent = fmtTs(data.timestamps?.depth, data.counts?.depth);
+      $("depth-ts").textContent = fmtTs(data.timestamps?.pointcloud, data.counts?.pointcloud);
       $("map-ts").textContent = fmtTs(data.timestamps?.map, data.counts?.map);
       $("vlm-ts").textContent = fmtTs(data.timestamps?.vlm || data.timestamps?.stt);
-      $("base-ts").textContent = fmtTs(data.timestamps?.base);
-      $("arm-ts").textContent = fmtTs(data.timestamps?.arm);
+      $("base-ts").textContent = fmtTs(
+        data.timestamps?.safety || data.timestamps?.person || data.timestamps?.cmd_out || data.timestamps?.base
+      );
+      $("arm-ts").textContent = fmtTs(
+        data.timestamps?.vla || data.timestamps?.vla_left || data.timestamps?.vla_right || data.timestamps?.arm
+      );
 
       $("stt-text").textContent = safeText(data.stt_text);
       $("robot-speech").textContent = safeText(data.robot_speech || data.vlm_decision?.robot_speech);
@@ -460,8 +796,29 @@ INDEX_HTML = r"""
 
       $("vlm-output").textContent = vlmLines.join("\n");
       $("vlm-reason").textContent = safeText(d.reason);
-      $("base-status").textContent = safeText(data.base_status);
-      $("arm-status").textContent = safeText(data.arm_status);
+
+      const cmdLines = [
+        "RAW  " + safeText(data.cmd_raw, "-"),
+        "OUT  " + safeText(data.cmd_out, "-"),
+      ];
+      const navLines = [
+        "SCAN " + safeText(data.scan_state, "-"),
+        "ODOM " + safeText(data.odom_state, "-"),
+        "LEGACY " + safeText(data.base_status, "-"),
+      ];
+
+      $("person-follow-state").textContent = safeText(data.person_follow_state);
+      $("safety-guard-state").textContent = safeText(data.safety_guard_state);
+      $("cmd-state").textContent = cmdLines.join("\n");
+      $("nav-state").textContent = navLines.join("\n");
+
+      $("vla-status").textContent = safeText(data.vla_status);
+      $("vla-left-status").textContent = safeText(data.vla_left_status);
+      $("vla-right-status").textContent = safeText(data.vla_right_status);
+      $("arm-status").textContent = [
+        "TASK_REQUEST " + safeText(data.vla_task_request, "-"),
+        "LEGACY " + safeText(data.arm_status, "-"),
+      ].join("\n");
     }
 
     function connect() {
@@ -493,6 +850,8 @@ INDEX_HTML = r"""
       $("clock").textContent = new Date().toLocaleString();
     }, 500);
 
+    initPointCloudViewer();
+
     connect();
   </script>
 </body>
@@ -505,7 +864,7 @@ class SharedState:
         self.lock = threading.Lock()
         self.data: Dict[str, Any] = {
             "rgb_image": None,
-            "depth_image": None,
+            "point_cloud": None,
             "map_image": None,
             "stt_text": "",
             "vlm_decision": {},
@@ -513,10 +872,20 @@ class SharedState:
             "inference_status": "대기중",
             "base_status": "데이터 대기중",
             "arm_status": "데이터 대기중",
+            "person_follow_state": "데이터 대기중",
+            "safety_guard_state": "데이터 대기중",
+            "cmd_raw": "데이터 대기중",
+            "cmd_out": "데이터 대기중",
+            "scan_state": "데이터 대기중",
+            "odom_state": "데이터 대기중",
+            "vla_status": "데이터 대기중",
+            "vla_left_status": "데이터 대기중",
+            "vla_right_status": "데이터 대기중",
+            "vla_task_request": "데이터 대기중",
             "timestamps": {},
             "counts": {
                 "rgb": 0,
-                "depth": 0,
+                "pointcloud": 0,
                 "map": 0,
             },
         }
@@ -715,6 +1084,144 @@ def occupancy_grid_to_png_data_url(msg: OccupancyGrid) -> Optional[str]:
         return None
 
 
+
+_POINT_FIELD_DTYPES = {
+    1: np.dtype(np.int8),
+    2: np.dtype(np.uint8),
+    3: np.dtype(np.int16),
+    4: np.dtype(np.uint16),
+    5: np.dtype(np.int32),
+    6: np.dtype(np.uint32),
+    7: np.dtype(np.float32),
+    8: np.dtype(np.float64),
+}
+
+
+def pointcloud2_to_payload(
+    msg: PointCloud2,
+    max_points: int = 6000,
+    max_range_m: float = 5.0,
+) -> Optional[Dict[str, Any]]:
+    if msg.width <= 0 or msg.height <= 0 or msg.point_step <= 0:
+        return None
+
+    field_map = {field.name: field for field in msg.fields}
+    if not {"x", "y", "z"}.issubset(field_map.keys()):
+        return None
+
+    names = []
+    formats = []
+    offsets = []
+    endian = ">" if msg.is_bigendian else "<"
+
+    for field in msg.fields:
+        base = _POINT_FIELD_DTYPES.get(int(field.datatype))
+        if base is None:
+            continue
+
+        base = base.newbyteorder(endian)
+        count = max(1, int(field.count))
+
+        names.append(field.name)
+        formats.append(base if count == 1 else (base, count))
+        offsets.append(int(field.offset))
+
+    try:
+        dtype = np.dtype({
+            "names": names,
+            "formats": formats,
+            "offsets": offsets,
+            "itemsize": int(msg.point_step),
+        })
+
+        total_points = int(msg.width) * int(msg.height)
+        arr = np.frombuffer(bytes(msg.data), dtype=dtype, count=total_points)
+
+        x = np.asarray(arr["x"], dtype=np.float32).reshape(-1)
+        y = np.asarray(arr["y"], dtype=np.float32).reshape(-1)
+        z = np.asarray(arr["z"], dtype=np.float32).reshape(-1)
+
+        valid = np.isfinite(x) & np.isfinite(y) & np.isfinite(z)
+        valid &= z > 0.02
+
+        if max_range_m > 0:
+            valid &= np.sqrt(x * x + y * y + z * z) <= float(max_range_m)
+
+        indices = np.flatnonzero(valid)
+
+        if indices.size == 0:
+            return {
+                "points": [],
+                "colors": [],
+                "count": 0,
+                "frame_id": msg.header.frame_id,
+                "source_points": total_points,
+            }
+
+        if indices.size > max_points:
+            step = int(math.ceil(indices.size / float(max_points)))
+            indices = indices[::step][:max_points]
+
+        # RealSense optical frame: x=right, y=down, z=forward.
+        # Viewer frame: x=right, y=up, z=forward-into-screen.
+        pts = np.column_stack((x[indices], -y[indices], -z[indices])).astype(np.float32)
+
+        colors = None
+
+        if "rgb" in arr.dtype.names:
+            rgb_raw = np.asarray(arr["rgb"][indices]).reshape(-1)
+            if rgb_raw.dtype == np.float32:
+                rgb_uint = rgb_raw.copy().view(np.uint32)
+            else:
+                rgb_uint = rgb_raw.astype(np.uint32, copy=False)
+
+            colors = np.column_stack((
+                ((rgb_uint >> 16) & 255),
+                ((rgb_uint >> 8) & 255),
+                (rgb_uint & 255),
+            )).astype(np.float32) / 255.0
+
+        elif "rgba" in arr.dtype.names:
+            rgba_raw = np.asarray(arr["rgba"][indices]).reshape(-1)
+            if rgba_raw.dtype == np.float32:
+                rgba_uint = rgba_raw.copy().view(np.uint32)
+            else:
+                rgba_uint = rgba_raw.astype(np.uint32, copy=False)
+
+            colors = np.column_stack((
+                ((rgba_uint >> 16) & 255),
+                ((rgba_uint >> 8) & 255),
+                (rgba_uint & 255),
+            )).astype(np.float32) / 255.0
+
+        elif {"r", "g", "b"}.issubset(arr.dtype.names):
+            colors = np.column_stack((
+                np.asarray(arr["r"][indices]).reshape(-1),
+                np.asarray(arr["g"][indices]).reshape(-1),
+                np.asarray(arr["b"][indices]).reshape(-1),
+            )).astype(np.float32) / 255.0
+
+        if colors is None:
+            depth = np.clip(z[indices], 0.0, max(0.1, float(max_range_m)))
+            norm = depth / max(0.1, float(max_range_m))
+            colors = np.column_stack((
+                0.25 + 0.75 * (1.0 - norm),
+                0.55 + 0.35 * norm,
+                1.0 * norm,
+            )).astype(np.float32)
+
+        return {
+            "points": np.round(pts, 4).reshape(-1).tolist(),
+            "colors": np.round(colors, 4).reshape(-1).tolist(),
+            "count": int(pts.shape[0]),
+            "source_points": total_points,
+            "frame_id": msg.header.frame_id,
+        }
+
+    except Exception:
+        return None
+
+
 def parse_json_string_or_raw(text: str) -> Dict[str, Any]:
     text = text.strip()
     if not text:
@@ -729,6 +1236,50 @@ def parse_json_string_or_raw(text: str) -> Dict[str, Any]:
         return {"raw": text}
 
 
+def pretty_json_string_or_raw(text: str) -> str:
+    parsed = parse_json_string_or_raw(text)
+    if not parsed:
+        return "대기중"
+    if set(parsed.keys()) == {"raw"}:
+        return str(parsed["raw"])
+    return json.dumps(parsed, ensure_ascii=False, indent=2)
+
+
+def twist_to_text(msg: Twist) -> str:
+    return (
+        f"linear.x={msg.linear.x:+.3f}, linear.y={msg.linear.y:+.3f}, linear.z={msg.linear.z:+.3f}\n"
+        f"angular.x={msg.angular.x:+.3f}, angular.y={msg.angular.y:+.3f}, angular.z={msg.angular.z:+.3f}"
+    )
+
+
+def odom_to_text(msg: Odometry) -> str:
+    p = msg.pose.pose.position
+    q = msg.pose.pose.orientation
+    yaw = math.atan2(
+        2.0 * (q.w * q.z + q.x * q.y),
+        1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+    )
+    yaw_deg = math.degrees(yaw)
+    v = msg.twist.twist.linear
+    w = msg.twist.twist.angular
+    return (
+        f"pos x={p.x:+.3f}, y={p.y:+.3f}, yaw={yaw_deg:+.1f}deg\n"
+        f"vel x={v.x:+.3f}, y={v.y:+.3f}, wz={w.z:+.3f}"
+    )
+
+
+def scan_to_text(msg: LaserScan) -> str:
+    values = np.asarray(msg.ranges, dtype=np.float32)
+    finite = values[np.isfinite(values)]
+    valid = finite[(finite > max(0.0, float(msg.range_min))) & (finite < float(msg.range_max))]
+    if valid.size == 0:
+        return "valid_range=0"
+    return (
+        f"min={float(np.min(valid)):.3f}m, mean={float(np.mean(valid)):.3f}m, "
+        f"valid={int(valid.size)}/{len(msg.ranges)}"
+    )
+
+
 class ZeriDashboardNode(Node):
     def __init__(self, args: argparse.Namespace) -> None:
         super().__init__("zeri_dashboard_server_node")
@@ -740,7 +1291,7 @@ class ZeriDashboardNode(Node):
         map_qos = make_qos(args.map_qos, 5)
 
         self.create_subscription(Image, args.rgb_topic, self.rgb_callback, image_qos)
-        self.create_subscription(Image, args.depth_topic, self.depth_callback, image_qos)
+        self.create_subscription(PointCloud2, args.pointcloud_topic, self.pointcloud_callback, image_qos)
         self.create_subscription(OccupancyGrid, args.map_topic, self.map_callback, map_qos)
 
         self.create_subscription(String, args.stt_topic, self.stt_callback, text_qos)
@@ -751,9 +1302,21 @@ class ZeriDashboardNode(Node):
         self.create_subscription(String, args.base_status_topic, self.base_status_callback, text_qos)
         self.create_subscription(String, args.arm_status_topic, self.arm_status_callback, text_qos)
 
+        self.create_subscription(String, args.person_state_topic, self.person_state_callback, text_qos)
+        self.create_subscription(String, args.safety_state_topic, self.safety_state_callback, text_qos)
+        self.create_subscription(Twist, args.cmd_raw_topic, self.cmd_raw_callback, text_qos)
+        self.create_subscription(Twist, args.cmd_out_topic, self.cmd_out_callback, text_qos)
+        self.create_subscription(LaserScan, args.scan_topic, self.scan_callback, image_qos)
+        self.create_subscription(Odometry, args.odom_topic, self.odom_callback, text_qos)
+
+        self.create_subscription(String, args.vla_status_topic, self.vla_status_callback, text_qos)
+        self.create_subscription(String, args.vla_left_status_topic, self.vla_left_status_callback, text_qos)
+        self.create_subscription(String, args.vla_right_status_topic, self.vla_right_status_callback, text_qos)
+        self.create_subscription(String, args.vla_task_request_topic, self.vla_task_request_callback, text_qos)
+
         self.get_logger().info("Ze-Ri Dashboard subscriptions:")
         self.get_logger().info(f"  RGB:              {args.rgb_topic}")
-        self.get_logger().info(f"  Depth:            {args.depth_topic}")
+        self.get_logger().info(f"  3D PointCloud:    {args.pointcloud_topic}")
         self.get_logger().info(f"  Map:              {args.map_topic}")
         self.get_logger().info(f"  STT:              {args.stt_topic}")
         self.get_logger().info(f"  VLM decision:     {args.vlm_decision_topic}")
@@ -761,6 +1324,13 @@ class ZeriDashboardNode(Node):
         self.get_logger().info(f"  Inference status: {args.inference_status_topic}")
         self.get_logger().info(f"  Base status:      {args.base_status_topic}")
         self.get_logger().info(f"  Arm status:       {args.arm_status_topic}")
+        self.get_logger().info(f"  Person state:     {args.person_state_topic}")
+        self.get_logger().info(f"  Safety state:     {args.safety_state_topic}")
+        self.get_logger().info(f"  cmd raw/out:      {args.cmd_raw_topic} -> {args.cmd_out_topic}")
+        self.get_logger().info(f"  Scan/Odom:        {args.scan_topic} / {args.odom_topic}")
+        self.get_logger().info(f"  VLA status:       {args.vla_status_topic}")
+        self.get_logger().info(f"  VLA left/right:   {args.vla_left_status_topic} / {args.vla_right_status_topic}")
+        self.get_logger().info(f"  VLA request:      {args.vla_task_request_topic}")
         self.get_logger().info(f"  Image QoS:        {args.image_qos}")
 
         self.mock_start_time = time.time()
@@ -784,18 +1354,17 @@ class ZeriDashboardNode(Node):
             STATE.update_timestamp("rgb")
             STATE.increment_count("rgb")
 
-    def depth_callback(self, msg: Image) -> None:
-        bgr = depth_msg_to_colormap(msg)
-        data_url = encode_image_to_data_url(
-            bgr,
-            ext=".jpg",
-            quality=self.args.jpeg_quality,
+    def pointcloud_callback(self, msg: PointCloud2) -> None:
+        payload = pointcloud2_to_payload(
+            msg,
+            max_points=int(self.args.pointcloud_max_points),
+            max_range_m=float(self.args.pointcloud_max_range_m),
         )
 
-        if data_url:
-            STATE.update(depth_image=data_url)
-            STATE.update_timestamp("depth")
-            STATE.increment_count("depth")
+        if payload is not None:
+            STATE.update(point_cloud=payload)
+            STATE.update_timestamp("pointcloud")
+            STATE.increment_count("pointcloud")
 
     def map_callback(self, msg: OccupancyGrid) -> None:
         data_url = occupancy_grid_to_png_data_url(msg)
@@ -836,6 +1405,46 @@ class ZeriDashboardNode(Node):
     def arm_status_callback(self, msg: String) -> None:
         STATE.update(arm_status=msg.data)
         STATE.update_timestamp("arm")
+
+    def person_state_callback(self, msg: String) -> None:
+        STATE.update(person_follow_state=pretty_json_string_or_raw(msg.data))
+        STATE.update_timestamp("person")
+
+    def safety_state_callback(self, msg: String) -> None:
+        STATE.update(safety_guard_state=pretty_json_string_or_raw(msg.data))
+        STATE.update_timestamp("safety")
+
+    def cmd_raw_callback(self, msg: Twist) -> None:
+        STATE.update(cmd_raw=twist_to_text(msg))
+        STATE.update_timestamp("cmd_raw")
+
+    def cmd_out_callback(self, msg: Twist) -> None:
+        STATE.update(cmd_out=twist_to_text(msg))
+        STATE.update_timestamp("cmd_out")
+
+    def scan_callback(self, msg: LaserScan) -> None:
+        STATE.update(scan_state=scan_to_text(msg))
+        STATE.update_timestamp("scan")
+
+    def odom_callback(self, msg: Odometry) -> None:
+        STATE.update(odom_state=odom_to_text(msg))
+        STATE.update_timestamp("odom")
+
+    def vla_status_callback(self, msg: String) -> None:
+        STATE.update(vla_status=pretty_json_string_or_raw(msg.data))
+        STATE.update_timestamp("vla")
+
+    def vla_left_status_callback(self, msg: String) -> None:
+        STATE.update(vla_left_status=pretty_json_string_or_raw(msg.data))
+        STATE.update_timestamp("vla_left")
+
+    def vla_right_status_callback(self, msg: String) -> None:
+        STATE.update(vla_right_status=pretty_json_string_or_raw(msg.data))
+        STATE.update_timestamp("vla_right")
+
+    def vla_task_request_callback(self, msg: String) -> None:
+        STATE.update(vla_task_request=pretty_json_string_or_raw(msg.data))
+        STATE.update_timestamp("vla")
 
     def mock_status_callback(self) -> None:
         t = time.time() - self.mock_start_time
@@ -930,8 +1539,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--map-qos", choices=["reliable", "best_effort"], default="reliable")
     parser.add_argument("--image-qos-depth", type=int, default=10)
 
-    parser.add_argument("--rgb-topic", default="/zeri/top/rgb/image_raw")
-    parser.add_argument("--depth-topic", default="/zeri/top/depth/image_raw")
+    parser.add_argument("--rgb-topic", default="/camera/camera/color/image_raw")
+    parser.add_argument("--depth-topic", default="/camera/camera/aligned_depth_to_color/image_raw")
+    parser.add_argument("--pointcloud-topic", default="/camera/camera/depth/color/points")
+    parser.add_argument("--pointcloud-max-points", type=int, default=6000)
+    parser.add_argument("--pointcloud-max-range-m", type=float, default=5.0)
     parser.add_argument("--map-topic", default="/map")
 
     parser.add_argument("--stt-topic", default="/stt/text")
@@ -942,10 +1554,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-status-topic", default="/zeri/mobile_base/status")
     parser.add_argument("--arm-status-topic", default="/zeri/arm/status")
 
+    parser.add_argument("--person-state-topic", default="/zeri/person_follow/state")
+    parser.add_argument("--safety-state-topic", default="/zeri/safety_guard/state")
+    parser.add_argument("--cmd-raw-topic", default="/cmd_vel_raw")
+    parser.add_argument("--cmd-out-topic", default="/cmd_vel")
+    parser.add_argument("--scan-topic", default="/scan_front")
+    parser.add_argument("--odom-topic", default="/odom")
+
+    parser.add_argument("--vla-status-topic", default="/zeri/vla/status")
+    parser.add_argument("--vla-left-status-topic", default="/zeri/vla/left/status")
+    parser.add_argument("--vla-right-status-topic", default="/zeri/vla/right/status")
+    parser.add_argument("--vla-task-request-topic", default="/zeri/vla/task_request")
+
     parser.add_argument(
         "--mock-status",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="Show temporary mock mobile-base and arm status on dashboard.",
     )
 
@@ -958,6 +1582,12 @@ def main() -> None:
 
     rclpy.init(args=ros_args)
 
+    if not hasattr(args, "pointcloud_topic"):
+        args.pointcloud_topic = "/camera/camera/depth/color/points"
+    if not hasattr(args, "pointcloud_max_points"):
+        args.pointcloud_max_points = 6000
+    if not hasattr(args, "pointcloud_max_range_m"):
+        args.pointcloud_max_range_m = 5.0
     node = ZeriDashboardNode(args)
 
     spin_thread = threading.Thread(

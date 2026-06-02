@@ -31,6 +31,8 @@ PERSON_STATE_TOPIC="${PERSON_STATE_TOPIC:-/zeri/person_follow/state}"
 SAFETY_STATE_TOPIC="${SAFETY_STATE_TOPIC:-/zeri/safety_guard/state}"
 
 # Optional visualization / mapping
+START_SLAM="${START_SLAM:-true}"
+SLAM_PARAMS_FILE="${SLAM_PARAMS_FILE:-$ROOT/configs/slam/mapper_params_online_async.yaml}"
 START_OCTOMAP="${START_OCTOMAP:-false}"
 START_RVIZ="${START_RVIZ:-false}"
 
@@ -154,6 +156,8 @@ say "Ze-Ri person follow + LiDAR/Depth safety drive"
 say "LOG_DIR=$LOG_DIR"
 say "ARDUINO_PORT=$ARDUINO_PORT"
 say "LIDAR_PORT=$LIDAR_PORT"
+say "START_SLAM=$START_SLAM"
+say "SLAM_PARAMS_FILE=$SLAM_PARAMS_FILE"
 say "START_OCTOMAP=$START_OCTOMAP"
 say "START_RVIZ=$START_RVIZ"
 say "============================================================"
@@ -338,11 +342,30 @@ start_node "07_base_velocity" \
     -p log_encoder_line:=false
 
 # =========================
+# 8. SLAM toolbox 2D map
+#    /scan_front + /odom -> /map
+# =========================
+
+if [ "$START_SLAM" = "true" ]; then
+  if [ ! -f "$SLAM_PARAMS_FILE" ]; then
+    say "ERROR missing SLAM params file: $SLAM_PARAMS_FILE"
+    exit 1
+  fi
+
+  start_node "08_slam_toolbox" \
+    ros2 launch slam_toolbox online_async_launch.py \
+      use_sim_time:=false \
+      slam_params_file:="$SLAM_PARAMS_FILE"
+
+  wait_topic "/map" 25 || true
+fi
+
+# =========================
 # Optional OctoMap
 # =========================
 
 if [ "$START_OCTOMAP" = "true" ]; then
-  start_node "08_octomap_camera_frame" \
+  start_node "09_octomap_camera_frame" \
     ros2 run octomap_server octomap_server_node --ros-args \
       -r cloud_in:="$POINTS_TOPIC" \
       -p frame_id:=camera_depth_optical_frame \
@@ -359,7 +382,7 @@ fi
 # =========================
 
 if [ "$START_RVIZ" = "true" ]; then
-  start_node "09_rviz" rviz2
+  start_node "10_rviz" rviz2
 fi
 
 say "============================================================"
@@ -370,6 +393,7 @@ say "  ros2 topic echo $SAFETY_STATE_TOPIC"
 say "  ros2 topic echo $PERSON_STATE_TOPIC"
 say "  ros2 topic echo $CMD_RAW_TOPIC"
 say "  ros2 topic echo $CMD_OUT_TOPIC"
+say "  ros2 topic hz /map"
 say ""
 say "Logs:"
 say "  $LOG_DIR"

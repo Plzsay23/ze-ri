@@ -7,7 +7,7 @@ import queue
 import re
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 
 import cv2
@@ -66,18 +66,56 @@ VALID_NAV_INTENTS = {
     "go_to_safe_zone",
 }
 
+MISSION_SEARCH_PERSON = "SEARCH_PERSON"
+MISSION_SELECT_TARGET = "SELECT_TARGET"
+MISSION_APPROACH_PERSON = "APPROACH_PERSON"
+MISSION_STOP_AT_DISTANCE = "STOP_AT_DISTANCE"
+MISSION_TRIAGE_DIALOGUE = "TRIAGE_DIALOGUE"
+MISSION_RUN_VLA = "RUN_VLA"
+MISSION_VERIFY_HANDOFF = "VERIFY_HANDOFF"
+MISSION_RETURN_ARM_HOME = "RETURN_ARM_HOME"
+MISSION_MARK_AND_REPORT = "MARK_AND_REPORT"
+MISSION_RESUME_SEARCH = "RESUME_SEARCH"
+
+VALID_MISSION_STATES = {
+    MISSION_SEARCH_PERSON,
+    MISSION_SELECT_TARGET,
+    MISSION_APPROACH_PERSON,
+    MISSION_STOP_AT_DISTANCE,
+    MISSION_TRIAGE_DIALOGUE,
+    MISSION_RUN_VLA,
+    MISSION_VERIFY_HANDOFF,
+    MISSION_RETURN_ARM_HOME,
+    MISSION_MARK_AND_REPORT,
+    MISSION_RESUME_SEARCH,
+}
+
+VALID_HANDOFF_STATUSES = {
+    "not_applicable",
+    "unknown",
+    "waiting",
+    "received",
+    "not_received",
+    "failed",
+}
+
 
 SYSTEM_PROMPT = """
 너는 재난 상황 초동 조치를 위한 모바일 매니퓰레이터 Ze-Ri의 VLM 에이전트다.
 
-현재 시스템 구조:
-- STT 텍스트와 top-view RGB 카메라 이미지를 입력으로 받는다.
-- 너는 재난 상황을 판단한다.
-- LED 색상 명령을 결정한다.
-- 사용자에게 말할 TTS 문장을 만든다.
-- ACT 기반 VLA 실행이 필요한 경우 selected_task를 선택한다.
-- 실제 바퀴 raw 제어와 로봇팔 관절 제어는 직접 생성하지 않는다.
+역할:
+- 너는 바퀴 속도값, cmd_vel, 모터 raw command를 생성하지 않는다.
+- 너는 현재 로봇이 어떤 임무 상태여야 하는지 판단한다.
+- 너는 navigation controller가 수행할 고수준 nav_intent만 결정한다.
+- 너는 LED 색상, TTS 문장, ACT 기반 VLA task 실행 여부를 결정한다.
+- 너는 VLA가 물건을 건넨 뒤 카메라로 사람이 실제로 받았는지 확인한다.
+- 너는 응급도가 높은 요구조자를 발견하면 지도 마킹과 본부 보고 필요 여부를 결정한다.
+
+운영 구조:
+- 사람 탐지, 추적, 거리 계산, 실제 바퀴 제어는 별도 노드가 수행한다.
+- 너는 person_context와 mission_context를 참고해 상태와 의도를 판단한다.
 - 실제 VLA 실행은 별도 executor가 수행한다.
+- 로봇팔 home 복귀도 별도 노드가 수행한다. 너는 arm_home_required만 판단한다.
 
 현재 사용 가능한 ACT VLA task는 정확히 두 개뿐이다:
 1. oxygen_mask_delivery
@@ -88,15 +126,25 @@ SYSTEM_PROMPT = """
 이 두 task 외에는 VLA를 실행하면 안 된다.
 그 외 상황은 idle, status_check, call_rescue 중 하나로 판단한다.
 
-상황 판단 기준:
-- "숨쉬기 힘들다", "숨을 못 쉬겠다", "산소가 필요하다", "질식할 것 같다",
-  "가스 냄새가 난다", "연기 때문에 숨을 못 쉬겠다" 등은 산소마스크 전달 필요.
-- 장면에 사람이 있고 연기/화재/유독가스 위험이 추정되면 산소마스크 전달 필요.
-- 장면이 애매해도 사용자 텍스트가 호흡 곤란이면 산소마스크 전달 필요.
-- "구조대랑 연락", "무전기", "119 불러", "연락해줘", "도와줘", "통신" 등은 무전기 전달 또는 구조대 통신 필요.
-- 사람이 반응하지 않거나, 처치가 불확실하거나, 직접 처치할 수 없는 상황이면 radio_delivery 또는 call_rescue를 선택한다.
-- 일반 대화, 인사, 위험 없음이면 idle.
-- 판단이 불확실하면 status_check를 선택하고 추가 질문을 한다.
+소방 초동 대응 대화 원칙:
+- 먼저 의식과 반응을 확인한다: "제 말 들리십니까? 괜찮으십니까?"
+- 호흡곤란, 연기/가스 흡입, 질식 호소는 우선 산소마스크 전달로 판단한다.
+- 구조대와 연락, 통신 요청, 신고 요청은 무전기 전달 또는 구조대 호출로 판단한다.
+- 무반응, 이동 불가, 중증 외상, 심한 출혈, 호흡 이상, 연기/화재 근접은 critical 또는 danger로 판단한다.
+- 직접 처치할 수 없거나 처치가 불확실하면 call_rescue를 선택하고 지도 마킹을 권장한다.
+- 판단이 불확실하면 status_check를 선택하고 짧은 추가 질문을 한다.
+
+mission_state 운용 규칙:
+- SEARCH_PERSON: 사람 탐색 상태. nav_intent는 rotate_search 또는 hold_position.
+- SELECT_TARGET: 여러 사람 중 접근 대상을 고르는 상태. selected_person_id를 지정한다.
+- APPROACH_PERSON: 선택된 사람에게 접근하는 상태. nav_intent는 approach_person.
+- STOP_AT_DISTANCE: 일정 거리 이내에 들어와 정지하는 상태. nav_intent는 stop 또는 hold_position.
+- TRIAGE_DIALOGUE: 요구조자 앞에서 문진/판단하는 상태. nav_intent는 hold_position.
+- RUN_VLA: ACT VLA task 실행 상태. nav_intent는 hold_position.
+- VERIFY_HANDOFF: VLA 완료 후 사람이 물건을 받았는지 확인하는 상태.
+- RETURN_ARM_HOME: 물건 전달 완료 후 로봇팔 home 복귀가 필요한 상태.
+- MARK_AND_REPORT: 중증자 위치를 지도에 마킹하고 본부 보고가 필요한 상태.
+- RESUME_SEARCH: 처치 루프 종료 후 다시 탐색으로 복귀하는 상태.
 
 LED command rule:
 0 = OFF: 대기 또는 종료
@@ -110,6 +158,8 @@ LED command rule:
 
 출력 JSON schema:
 {
+  "mission_state": "SEARCH_PERSON|SELECT_TARGET|APPROACH_PERSON|STOP_AT_DISTANCE|TRIAGE_DIALOGUE|RUN_VLA|VERIFY_HANDOFF|RETURN_ARM_HOME|MARK_AND_REPORT|RESUME_SEARCH",
+  "selected_person_id": "문자열 또는 none",
   "hazard_level": "normal|caution|urgent|critical|danger",
   "scene_status": "normal|respiratory_distress|needs_communication|no_response|fire_nearby|smoke_or_gas|blocked_path|unknown",
   "selected_task": "idle|status_check|oxygen_mask_delivery|radio_delivery|call_rescue",
@@ -117,6 +167,11 @@ LED command rule:
   "vla_required": true,
   "vla_instruction": "Deliver the oxygen mask to the person.",
   "task_duration_sec": 20.0,
+  "handoff_status": "not_applicable|unknown|waiting|received|not_received|failed",
+  "arm_home_required": false,
+  "map_mark_required": false,
+  "map_mark_type": "none|victim|critical_victim|hazard|blocked_path",
+  "report_to_base": false,
   "led_cmd": 1,
   "confidence": 0.0,
   "reason": "짧은 한국어 이유",
@@ -127,13 +182,18 @@ LED command rule:
 - selected_task가 oxygen_mask_delivery이면:
   - vla_required = true
   - vla_instruction = "Deliver the oxygen mask to the person."
+  - mission_state = RUN_VLA
   - led_cmd = 1 또는 5
 - selected_task가 radio_delivery이면:
   - vla_required = true
   - vla_instruction = "Deliver the radio device to the person."
+  - mission_state = RUN_VLA
   - led_cmd = 3 또는 5
 - selected_task가 idle/status_check/call_rescue이면:
   - vla_required = false
+- VERIFY_HANDOFF 상태에서는 사람이 물건을 받았다고 보이면 handoff_status="received", arm_home_required=true로 출력한다.
+- handoff_status="received"이면 mission_state는 RETURN_ARM_HOME 또는 RESUME_SEARCH로 둔다.
+- 무반응자, 중증 호흡곤란, 심한 출혈, 이동 불가자는 map_mark_required=true, map_mark_type="critical_victim", report_to_base=true로 둔다.
 - nav_intent는 고수준 의도만 출력한다. 속도값이나 cmd_vel은 절대 출력하지 않는다.
 - 반드시 JSON으로만 답한다.
 - JSON 바깥 문장은 절대 쓰지 않는다.
@@ -141,10 +201,16 @@ LED command rule:
 
 
 USER_PROMPT_TEMPLATE = """
-현재 카메라 장면과 STT 텍스트를 보고 재난 상황을 판단해라.
+현재 카메라 장면, STT 텍스트, mission_context를 보고 Ze-Ri의 다음 임무 상태를 판단해라.
 
-이번 단계에서는 ACT 기반 VLA task 실행까지 연동한다.
+이번 단계에서는 상태기계, LED, TTS, ACT 기반 VLA task, handoff 확인, 지도 마킹까지 연동한다.
 단, 실제 실행 가능한 VLA task는 oxygen_mask_delivery, radio_delivery 두 개뿐이다.
+
+요청 종류:
+{request_kind}
+
+현재 mission_context JSON:
+{mission_context_json}
 
 STT 텍스트:
 "{stt_text}"
@@ -155,6 +221,8 @@ JSON으로만 답해라.
 
 @dataclass
 class VLMDecision:
+    mission_state: str
+    selected_person_id: str
     hazard_level: str
     scene_status: str
     selected_task: str
@@ -167,7 +235,20 @@ class VLMDecision:
     vla_required: bool
     vla_instruction: str
     task_duration_sec: float
+    handoff_status: str
+    arm_home_required: bool
+    map_mark_required: bool
+    map_mark_type: str
+    report_to_base: bool
     raw_text: str
+
+
+@dataclass
+class VLMRequest:
+    stt_text: str
+    request_kind: str = "stt_triage"
+    mission_state: str = MISSION_TRIAGE_DIALOGUE
+    extra_context: Dict[str, Any] = field(default_factory=dict)
 
 
 def make_sensor_qos(depth: int = 5) -> QoSProfile:
@@ -335,12 +416,144 @@ def normalize_decision(
     raw_text: str,
     stt_text: str,
     default_task_duration_sec: float,
+    request_mission_state: str = MISSION_TRIAGE_DIALOGUE,
 ) -> VLMDecision:
+    def build_decision(
+        *,
+        mission_state: str,
+        selected_person_id: str = "none",
+        hazard_level: str,
+        scene_status: str,
+        selected_task: str,
+        nav_intent: str,
+        need_oxygen_mask: bool,
+        confidence: float,
+        led_cmd: int,
+        reason: str,
+        robot_speech: str,
+        vla_required: bool,
+        vla_instruction: str = "",
+        task_duration_sec: Optional[float] = None,
+        handoff_status: str = "not_applicable",
+        arm_home_required: bool = False,
+        map_mark_required: bool = False,
+        map_mark_type: str = "none",
+        report_to_base: bool = False,
+    ) -> VLMDecision:
+        if mission_state not in VALID_MISSION_STATES:
+            mission_state = request_mission_state
+            if mission_state not in VALID_MISSION_STATES:
+                mission_state = MISSION_TRIAGE_DIALOGUE
+
+        if selected_task not in VALID_TASKS:
+            selected_task = "status_check"
+
+        if nav_intent not in VALID_NAV_INTENTS:
+            nav_intent = "hold_position"
+
+        if handoff_status not in VALID_HANDOFF_STATUSES:
+            handoff_status = "unknown"
+
+        confidence = max(0.0, min(1.0, confidence))
+
+        if task_duration_sec is None:
+            task_duration_sec = default_task_duration_sec
+        task_duration_sec = max(1.0, float(task_duration_sec))
+
+        if selected_task == "oxygen_mask_delivery":
+            vla_required = True
+            need_oxygen_mask = True
+            vla_instruction = vla_instruction or default_instruction_for_task(selected_task)
+            mission_state = MISSION_RUN_VLA
+            nav_intent = "hold_position"
+            if hazard_level not in {"critical", "danger", "urgent"}:
+                hazard_level = "critical"
+            if scene_status == "unknown":
+                scene_status = "respiratory_distress"
+
+        elif selected_task == "radio_delivery":
+            vla_required = True
+            vla_instruction = vla_instruction or default_instruction_for_task(selected_task)
+            mission_state = MISSION_RUN_VLA
+            nav_intent = "hold_position"
+            if hazard_level == "normal":
+                hazard_level = "urgent"
+            if scene_status == "unknown":
+                scene_status = "needs_communication"
+
+        else:
+            vla_required = False
+            vla_instruction = ""
+
+        if mission_state in {
+            MISSION_STOP_AT_DISTANCE,
+            MISSION_TRIAGE_DIALOGUE,
+            MISSION_RUN_VLA,
+            MISSION_VERIFY_HANDOFF,
+            MISSION_RETURN_ARM_HOME,
+            MISSION_MARK_AND_REPORT,
+        }:
+            nav_intent = "hold_position" if nav_intent not in {"retreat", "go_to_safe_zone"} else nav_intent
+
+        if mission_state == MISSION_VERIFY_HANDOFF and handoff_status == "not_applicable":
+            handoff_status = "unknown"
+
+        if handoff_status == "received":
+            arm_home_required = True
+            if mission_state == MISSION_VERIFY_HANDOFF:
+                mission_state = MISSION_RETURN_ARM_HOME
+            nav_intent = "hold_position"
+
+        if mission_state == MISSION_RETURN_ARM_HOME:
+            arm_home_required = True
+
+        severe_scene = scene_status in {
+            "no_response",
+            "respiratory_distress",
+            "fire_nearby",
+            "smoke_or_gas",
+        }
+        severe_hazard = hazard_level in {"critical", "danger"}
+        if severe_hazard or scene_status == "no_response":
+            map_mark_required = True
+            report_to_base = True
+            if map_mark_type in {"", "none"}:
+                map_mark_type = "critical_victim"
+        elif severe_scene and hazard_level == "urgent":
+            report_to_base = True
+
+        if not map_mark_required:
+            map_mark_type = "none"
+
+        return VLMDecision(
+            mission_state=mission_state,
+            selected_person_id=selected_person_id,
+            hazard_level=hazard_level,
+            scene_status=scene_status,
+            selected_task=selected_task,
+            nav_intent=nav_intent,
+            need_oxygen_mask=need_oxygen_mask,
+            confidence=confidence,
+            led_cmd=clamp_led_cmd(led_cmd, default=LED_YELLOW),
+            reason=reason,
+            robot_speech=robot_speech,
+            vla_required=vla_required,
+            vla_instruction=vla_instruction,
+            task_duration_sec=task_duration_sec,
+            handoff_status=handoff_status,
+            arm_home_required=arm_home_required,
+            map_mark_required=map_mark_required,
+            map_mark_type=map_mark_type,
+            report_to_base=report_to_base,
+            raw_text=raw_text,
+        )
+
     if parsed is None:
         fallback_task = infer_task_from_text(stt_text)
 
         if fallback_task == "oxygen_mask_delivery":
-            return VLMDecision(
+            return build_decision(
+                mission_state=MISSION_RUN_VLA,
                 hazard_level="critical",
                 scene_status="respiratory_distress",
                 selected_task="oxygen_mask_delivery",
@@ -352,12 +565,14 @@ def normalize_decision(
                 robot_speech="호흡곤란으로 판단했습니다. 산소 마스크 전달을 준비하겠습니다.",
                 vla_required=True,
                 vla_instruction=default_instruction_for_task("oxygen_mask_delivery"),
-                task_duration_sec=default_task_duration_sec,
-                raw_text=raw_text,
+                map_mark_required=True,
+                map_mark_type="critical_victim",
+                report_to_base=True,
             )
 
         if fallback_task == "radio_delivery":
-            return VLMDecision(
+            return build_decision(
+                mission_state=MISSION_RUN_VLA,
                 hazard_level="urgent",
                 scene_status="needs_communication",
                 selected_task="radio_delivery",
@@ -369,11 +584,10 @@ def normalize_decision(
                 robot_speech="구조대와의 통신이 필요하다고 판단했습니다. 무전기 전달을 준비하겠습니다.",
                 vla_required=True,
                 vla_instruction=default_instruction_for_task("radio_delivery"),
-                task_duration_sec=default_task_duration_sec,
-                raw_text=raw_text,
             )
 
-        return VLMDecision(
+        return build_decision(
+            mission_state=request_mission_state,
             hazard_level="caution",
             scene_status="unknown",
             selected_task="status_check",
@@ -384,10 +598,19 @@ def normalize_decision(
             reason="VLM JSON parsing failed.",
             robot_speech="현재 판단 결과를 해석하지 못했습니다. 다시 말씀해 주세요.",
             vla_required=False,
-            vla_instruction="",
-            task_duration_sec=default_task_duration_sec,
-            raw_text=raw_text,
         )
+
+    mission_state = normalize_str(
+        parsed.get("mission_state"),
+        request_mission_state,
+    ).upper()
+    if mission_state not in VALID_MISSION_STATES:
+        mission_state = request_mission_state
+
+    selected_person_id = normalize_str(
+        parsed.get("selected_person_id", parsed.get("target_person_id", "none")),
+        "none",
+    )
 
     hazard_level = normalize_str(parsed.get("hazard_level"), "caution").lower()
     scene_status = normalize_str(parsed.get("scene_status"), "unknown").lower()
@@ -420,29 +643,8 @@ def normalize_decision(
         scene_status = "needs_communication"
         hazard_level = "urgent"
 
-    if selected_task == "oxygen_mask_delivery":
-        vla_required = True
-        need_oxygen_mask = True
-        if scene_status == "unknown":
-            scene_status = "respiratory_distress"
-        if hazard_level not in {"critical", "danger", "urgent"}:
-            hazard_level = "critical"
-
-    elif selected_task == "radio_delivery":
-        vla_required = True
-        if scene_status == "unknown":
-            scene_status = "needs_communication"
-        if hazard_level == "normal":
-            hazard_level = "urgent"
-
-    else:
-        vla_required = False
-
-    parsed_vla_required = parsed.get("vla_required", vla_required)
-    if selected_task in SUPPORTED_VLA_TASKS:
-        vla_required = bool(parsed_vla_required)
-    else:
-        vla_required = False
+    parsed_vla_required = bool(parsed.get("vla_required", selected_task in SUPPORTED_VLA_TASKS))
+    vla_required = parsed_vla_required and selected_task in SUPPORTED_VLA_TASKS
 
     vla_instruction = normalize_str(parsed.get("vla_instruction"), "")
     if vla_required and not vla_instruction:
@@ -452,7 +654,6 @@ def normalize_decision(
         parsed.get("task_duration_sec", default_task_duration_sec),
         default=default_task_duration_sec,
     )
-    task_duration_sec = max(1.0, task_duration_sec)
 
     fallback_led = resolve_led_cmd_from_fields(
         selected_task=selected_task,
@@ -460,8 +661,16 @@ def normalize_decision(
         hazard_level=hazard_level,
         confidence=confidence,
     )
-
     led_cmd = clamp_led_cmd(parsed.get("led_cmd", fallback_led), default=fallback_led)
+
+    handoff_status = normalize_str(parsed.get("handoff_status"), "not_applicable").lower()
+    if handoff_status not in VALID_HANDOFF_STATUSES:
+        handoff_status = "unknown"
+
+    arm_home_required = bool(parsed.get("arm_home_required", False))
+    map_mark_required = bool(parsed.get("map_mark_required", False))
+    map_mark_type = normalize_str(parsed.get("map_mark_type"), "none").lower()
+    report_to_base = bool(parsed.get("report_to_base", False))
 
     reason = normalize_str(parsed.get("reason"), "No reason provided.")
     robot_speech = normalize_str(parsed.get("robot_speech"), "")
@@ -472,13 +681,17 @@ def normalize_decision(
         elif selected_task == "radio_delivery":
             robot_speech = "구조대와의 통신이 필요하다고 판단했습니다. 무전기 전달을 준비하겠습니다."
         elif selected_task == "status_check":
-            robot_speech = "상황 판단이 불확실합니다. 필요한 도움이 무엇인지 다시 말씀해 주세요."
+            robot_speech = "괜찮으십니까? 제 말이 들리시면 필요한 도움을 말씀해 주세요."
         elif selected_task == "call_rescue":
-            robot_speech = "구조대의 도움이 필요한 상황으로 판단했습니다. 안전 거리를 유지하겠습니다."
+            robot_speech = "구조대의 도움이 필요한 상황으로 판단했습니다. 현재 위치를 표시하겠습니다."
+        elif handoff_status == "received":
+            robot_speech = "전달이 완료된 것으로 확인했습니다. 로봇팔을 원위치로 복귀하겠습니다."
         else:
             robot_speech = "현재 긴급 조치가 필요한 상황은 아닌 것으로 판단됩니다."
 
-    return VLMDecision(
+    return build_decision(
+        mission_state=mission_state,
+        selected_person_id=selected_person_id,
         hazard_level=hazard_level,
         scene_status=scene_status,
         selected_task=selected_task,
@@ -491,7 +704,11 @@ def normalize_decision(
         vla_required=vla_required,
         vla_instruction=vla_instruction,
         task_duration_sec=task_duration_sec,
-        raw_text=raw_text,
+        handoff_status=handoff_status,
+        arm_home_required=arm_home_required,
+        map_mark_required=map_mark_required,
+        map_mark_type=map_mark_type,
+        report_to_base=report_to_base,
     )
 
 
@@ -613,8 +830,25 @@ class QwenVLMRunner:
 
         self.processor = AutoProcessor.from_pretrained(model_id)
 
-    def infer(self, image: PILImage.Image, stt_text: str) -> VLMDecision:
-        prompt = USER_PROMPT_TEMPLATE.format(stt_text=stt_text)
+    def infer(
+        self,
+        image: PILImage.Image,
+        stt_text: str,
+        request_kind: str,
+        mission_context: Dict[str, Any],
+        request_mission_state: str,
+    ) -> VLMDecision:
+        mission_context_json = json.dumps(
+            mission_context,
+            ensure_ascii=False,
+            indent=2,
+        )
+
+        prompt = USER_PROMPT_TEMPLATE.format(
+            request_kind=request_kind,
+            mission_context_json=mission_context_json,
+            stt_text=stt_text,
+        )
 
         messages = [
             {
@@ -668,6 +902,7 @@ class QwenVLMRunner:
             raw_text=output_text,
             stt_text=stt_text,
             default_task_duration_sec=self.default_task_duration_sec,
+            request_mission_state=request_mission_state,
         )
 
 class ZeriVLMSTTBridgeNode(Node):
@@ -683,6 +918,16 @@ class ZeriVLMSTTBridgeNode(Node):
         self.declare_parameter("vlm_input_rgb_topic", "/zeri/vlm/input_rgb")
         self.declare_parameter("vlm_input_depth_topic", "/zeri/vlm/input_depth")
         self.declare_parameter("inference_status_topic", "/zeri/vlm/inference_status")
+
+        self.declare_parameter("mission_event_topic", "/zeri/mission/event")
+        self.declare_parameter("mission_state_topic", "/zeri/mission/state")
+        self.declare_parameter("nav_intent_topic", "/zeri/nav/intent")
+        self.declare_parameter("target_context_topic", "/zeri/person/target")
+        self.declare_parameter("map_marker_topic", "/zeri/map/person_marker")
+        self.declare_parameter("arm_home_request_topic", "/zeri/arm/home_request")
+        self.declare_parameter("enable_mission_events", True)
+        self.declare_parameter("verify_handoff_after_vla_success", True)
+        self.declare_parameter("initial_mission_state", MISSION_SEARCH_PERSON)
 
         self.declare_parameter("tts_status_topic", "/zeri/tts/status")
         self.declare_parameter("stt_mute_topic", "/zeri/stt/mute")
@@ -732,6 +977,27 @@ class ZeriVLMSTTBridgeNode(Node):
         self.vlm_input_rgb_topic = str(self.get_parameter("vlm_input_rgb_topic").value)
         self.vlm_input_depth_topic = str(self.get_parameter("vlm_input_depth_topic").value)
         self.inference_status_topic = str(self.get_parameter("inference_status_topic").value)
+
+        self.mission_event_topic = str(self.get_parameter("mission_event_topic").value)
+        self.mission_state_topic = str(self.get_parameter("mission_state_topic").value)
+        self.nav_intent_topic = str(self.get_parameter("nav_intent_topic").value)
+        self.target_context_topic = str(self.get_parameter("target_context_topic").value)
+        self.map_marker_topic = str(self.get_parameter("map_marker_topic").value)
+        self.arm_home_request_topic = str(
+            self.get_parameter("arm_home_request_topic").value
+        )
+        self.enable_mission_events = bool(
+            self.get_parameter("enable_mission_events").value
+        )
+        self.verify_handoff_after_vla_success = bool(
+            self.get_parameter("verify_handoff_after_vla_success").value
+        )
+        initial_mission_state = str(
+            self.get_parameter("initial_mission_state").value
+        ).upper()
+        if initial_mission_state not in VALID_MISSION_STATES:
+            initial_mission_state = MISSION_SEARCH_PERSON
+        self.mission_state = initial_mission_state
 
         self.tts_status_topic = str(self.get_parameter("tts_status_topic").value)
         self.stt_mute_topic = str(self.get_parameter("stt_mute_topic").value)
@@ -825,6 +1091,12 @@ class ZeriVLMSTTBridgeNode(Node):
             "안녕하세요",
         }
 
+        self.latest_target_context: Dict[str, Any] = {}
+        self.latest_target_context_time = 0.0
+        self.latest_mission_event: Dict[str, Any] = {}
+        self.latest_mission_event_time = 0.0
+        self.last_decision_context: Dict[str, Any] = {}
+
         self.last_accepted_text = ""
         self.last_accepted_time = 0.0
         self.last_inference_request_time = 0.0
@@ -849,7 +1121,7 @@ class ZeriVLMSTTBridgeNode(Node):
         self.latest_doa_deg: Optional[float] = None
         self.latest_doa_time = 0.0
 
-        self.text_queue: queue.Queue[str] = queue.Queue(maxsize=queue_size)
+        self.text_queue: queue.Queue[VLMRequest] = queue.Queue(maxsize=queue_size)
         self.stop_event = threading.Event()
 
         self.frame_lock = threading.Lock()
@@ -879,6 +1151,20 @@ class ZeriVLMSTTBridgeNode(Node):
             String,
             self.stt_topic,
             self.stt_callback,
+            reliable_qos,
+        )
+
+        self.mission_event_sub = self.create_subscription(
+            String,
+            self.mission_event_topic,
+            self.mission_event_callback,
+            reliable_qos,
+        )
+
+        self.target_context_sub = self.create_subscription(
+            String,
+            self.target_context_topic,
+            self.target_context_callback,
             reliable_qos,
         )
 
@@ -958,6 +1244,30 @@ class ZeriVLMSTTBridgeNode(Node):
             reliable_qos,
         )
 
+        self.mission_state_publisher = self.create_publisher(
+            String,
+            self.mission_state_topic,
+            reliable_qos,
+        )
+
+        self.nav_intent_publisher = self.create_publisher(
+            String,
+            self.nav_intent_topic,
+            reliable_qos,
+        )
+
+        self.map_marker_publisher = self.create_publisher(
+            String,
+            self.map_marker_topic,
+            reliable_qos,
+        )
+
+        self.arm_home_request_publisher = self.create_publisher(
+            Bool,
+            self.arm_home_request_topic,
+            reliable_qos,
+        )
+
         self.pipeline_timer = self.create_timer(
             0.2,
             self.pipeline_timer_callback,
@@ -971,6 +1281,8 @@ class ZeriVLMSTTBridgeNode(Node):
         self.get_logger().info(f"  VLA status:        {self.vla_status_topic}")
         self.get_logger().info(f"  VAD input:         {self.vad_topic}")
         self.get_logger().info(f"  DOA input:         {self.doa_topic}")
+        self.get_logger().info(f"  Mission event:     {self.mission_event_topic}")
+        self.get_logger().info(f"  Target context:    {self.target_context_topic}")
 
         self.get_logger().info("Zeri VLM-STT bridge node publishers:")
         self.get_logger().info(f"  Decision:          {self.decision_topic}")
@@ -981,6 +1293,10 @@ class ZeriVLMSTTBridgeNode(Node):
         self.get_logger().info(f"  VLM Depth snap:    {self.vlm_input_depth_topic}")
         self.get_logger().info(f"  VLM status:        {self.inference_status_topic}")
         self.get_logger().info(f"  STT mute:          {self.stt_mute_topic}")
+        self.get_logger().info(f"  Mission state:     {self.mission_state_topic}")
+        self.get_logger().info(f"  Nav intent:        {self.nav_intent_topic}")
+        self.get_logger().info(f"  Map marker:        {self.map_marker_topic}")
+        self.get_logger().info(f"  Arm home request:  {self.arm_home_request_topic}")
 
         self.get_logger().info("Runtime settings:")
         self.get_logger().info(f"  enable_vla: {self.enable_vla}")
@@ -999,8 +1315,14 @@ class ZeriVLMSTTBridgeNode(Node):
             f"  stt_block_after_tts_sec: {self.stt_block_after_tts_sec}"
         )
         self.get_logger().info(f"  tts_max_wait_sec: {self.tts_max_wait_sec}")
+        self.get_logger().info(f"  initial_mission_state: {self.mission_state}")
+        self.get_logger().info(
+            f"  verify_handoff_after_vla_success: "
+            f"{self.verify_handoff_after_vla_success}"
+        )
 
         self.publish_stt_mute(False)
+        self.publish_mission_state(self.mission_state, reason="startup")
 
         self.publish_led(self.led_on_loading)
         self.publish_inference_status("loading_vlm_model")
@@ -1053,6 +1375,295 @@ class ZeriVLMSTTBridgeNode(Node):
             self.get_logger().info("[STT MUTE] true")
         else:
             self.get_logger().info("[STT MUTE] false")
+
+
+    def publish_mission_state(self, state: str, reason: str = "") -> None:
+        state = str(state).strip().upper()
+        if state not in VALID_MISSION_STATES:
+            self.get_logger().warn(f"Ignored invalid mission_state: {state}")
+            return
+
+        self.mission_state = state
+
+        payload = {
+            "mission_state": self.mission_state,
+            "reason": reason,
+            "source": "zeri_vlm_stt_bridge_node",
+            "stamp_sec": time.time(),
+        }
+
+        msg = String()
+        msg.data = json.dumps(payload, ensure_ascii=False)
+        self.mission_state_publisher.publish(msg)
+        self.get_logger().info(f"[MISSION STATE] {msg.data}")
+
+    def publish_nav_intent(
+        self,
+        nav_intent: str,
+        mission_state: Optional[str] = None,
+        selected_person_id: str = "none",
+        reason: str = "",
+        source: str = "vlm_decision",
+    ) -> None:
+        nav_intent = str(nav_intent).strip().lower()
+        if nav_intent not in VALID_NAV_INTENTS:
+            self.get_logger().warn(f"Ignored invalid nav_intent: {nav_intent}")
+            return
+
+        state = mission_state or self.mission_state
+        if state not in VALID_MISSION_STATES:
+            state = self.mission_state
+
+        payload = {
+            "nav_intent": nav_intent,
+            "mission_state": state,
+            "selected_person_id": selected_person_id or "none",
+            "reason": reason,
+            "source": source,
+            "target_context": self.latest_target_context,
+            "stamp_sec": time.time(),
+        }
+
+        msg = String()
+        msg.data = json.dumps(payload, ensure_ascii=False)
+        self.nav_intent_publisher.publish(msg)
+        self.get_logger().info(f"[NAV INTENT] {msg.data}")
+
+    def publish_map_marker(self, decision: VLMDecision, request: VLMRequest) -> None:
+        if not decision.map_mark_required:
+            return
+
+        marker_id = f"victim_{int(time.time() * 1000)}"
+        target_context = self.latest_target_context if self.latest_target_context else {}
+
+        payload = {
+            "marker_id": marker_id,
+            "map_mark_type": decision.map_mark_type,
+            "hazard_level": decision.hazard_level,
+            "scene_status": decision.scene_status,
+            "selected_person_id": decision.selected_person_id,
+            "report_to_base": decision.report_to_base,
+            "reason": decision.reason,
+            "source": "zeri_vlm_stt_bridge_node",
+            "request_kind": request.request_kind,
+            "target_context": target_context,
+            "stamp_sec": time.time(),
+        }
+
+        msg = String()
+        msg.data = json.dumps(payload, ensure_ascii=False)
+        self.map_marker_publisher.publish(msg)
+        self.get_logger().info(f"[MAP MARKER] {msg.data}")
+
+    def publish_arm_home_request(self, decision: VLMDecision) -> None:
+        if not decision.arm_home_required:
+            return
+
+        msg = Bool()
+        msg.data = True
+        self.arm_home_request_publisher.publish(msg)
+        self.publish_mission_state(MISSION_RETURN_ARM_HOME, reason="arm_home_required")
+        self.get_logger().info("[ARM HOME REQUEST] true")
+
+    def build_mission_context(self, request: VLMRequest) -> Dict[str, Any]:
+        target_age_sec = None
+        if self.latest_target_context_time > 0.0:
+            target_age_sec = round(time.time() - self.latest_target_context_time, 3)
+
+        event_age_sec = None
+        if self.latest_mission_event_time > 0.0:
+            event_age_sec = round(time.time() - self.latest_mission_event_time, 3)
+
+        doa_age_sec = None
+        if self.latest_doa_time > 0.0:
+            doa_age_sec = round(time.time() - self.latest_doa_time, 3)
+
+        return {
+            "current_mission_state": self.mission_state,
+            "request_mission_state": request.mission_state,
+            "request_kind": request.request_kind,
+            "extra_context": request.extra_context,
+            "latest_target_context": self.latest_target_context,
+            "latest_target_context_age_sec": target_age_sec,
+            "latest_mission_event": self.latest_mission_event,
+            "latest_mission_event_age_sec": event_age_sec,
+            "latest_doa_deg": self.latest_doa_deg,
+            "latest_doa_age_sec": doa_age_sec,
+            "latest_vad": self.latest_vad,
+            "vla_active": self.vla_active,
+            "waiting_for_vla": self.waiting_for_vla,
+            "active_vla_task_id": self.active_vla_task_id,
+            "supported_vla_tasks": sorted(SUPPORTED_VLA_TASKS),
+            "valid_nav_intents": sorted(VALID_NAV_INTENTS),
+        }
+
+    def enqueue_vlm_request(
+        self,
+        request: VLMRequest,
+        reason: str,
+        block_pipeline: bool = True,
+    ) -> bool:
+        if block_pipeline:
+            if self.is_stt_input_blocked():
+                self.get_logger().info(
+                    f"Ignored VLM request while pipeline is busy: {reason}, "
+                    f"request_kind={request.request_kind}"
+                )
+                self.publish_inference_status("ignored_vlm_request_pipeline_busy")
+                return False
+
+            self.begin_pipeline_block(reason)
+
+        try:
+            self.text_queue.put_nowait(request)
+        except queue.Full:
+            try:
+                dropped = self.text_queue.get_nowait()
+                self.get_logger().warn(
+                    f"Dropped old VLM request due to full queue: {dropped}"
+                )
+            except queue.Empty:
+                pass
+
+            try:
+                self.text_queue.put_nowait(request)
+            except queue.Full:
+                self.get_logger().error("Failed to enqueue VLM request.")
+                self.publish_inference_status("queue_full_error")
+                self.publish_led(self.led_on_error)
+                if block_pipeline:
+                    self.release_pipeline_block("queue_full_error")
+                return False
+
+        self.get_logger().info(
+            f"[VLM REQUEST] kind={request.request_kind}, "
+            f"state={request.mission_state}, text={request.stt_text}"
+        )
+        return True
+
+    def target_context_callback(self, msg: String) -> None:
+        text = msg.data.strip()
+        if not text:
+            return
+
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            self.get_logger().warn(f"Invalid target context JSON: {text}")
+            return
+
+        self.latest_target_context = data
+        self.latest_target_context_time = time.time()
+        self.get_logger().info(f"[TARGET CONTEXT] {text}")
+
+    def mission_event_callback(self, msg: String) -> None:
+        if not self.enable_mission_events:
+            return
+
+        text = msg.data.strip()
+        if not text:
+            return
+
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            self.get_logger().warn(f"Invalid mission event JSON: {text}")
+            return
+
+        event = str(data.get("event", "")).strip().lower()
+        self.latest_mission_event = data
+        self.latest_mission_event_time = time.time()
+
+        if "target_context" in data and isinstance(data["target_context"], dict):
+            self.latest_target_context = data["target_context"]
+            self.latest_target_context_time = time.time()
+
+        self.get_logger().info(f"[MISSION EVENT] {text}")
+
+        if event in {"person_detected", "target_selected"}:
+            selected_person_id = str(
+                data.get("selected_person_id", data.get("target_person_id", "none"))
+            )
+            self.publish_mission_state(MISSION_APPROACH_PERSON, reason=event)
+            self.publish_nav_intent(
+                "approach_person",
+                mission_state=MISSION_APPROACH_PERSON,
+                selected_person_id=selected_person_id,
+                reason=event,
+                source="mission_event",
+            )
+            return
+
+        if event in {"person_lost", "target_lost", "search_person"}:
+            self.publish_mission_state(MISSION_SEARCH_PERSON, reason=event)
+            self.publish_nav_intent(
+                "rotate_search",
+                mission_state=MISSION_SEARCH_PERSON,
+                reason=event,
+                source="mission_event",
+            )
+            return
+
+        if event in {"arrived_at_person", "stop_at_distance"}:
+            self.publish_mission_state(MISSION_STOP_AT_DISTANCE, reason=event)
+            self.publish_nav_intent(
+                "hold_position",
+                mission_state=MISSION_STOP_AT_DISTANCE,
+                selected_person_id=str(
+                    data.get("selected_person_id", data.get("target_person_id", "none"))
+                ),
+                reason=event,
+                source="mission_event",
+            )
+
+            request = VLMRequest(
+                stt_text="요구조자 앞에 도착했다. 의식과 호흡 상태를 확인하는 첫 문진을 시작해라.",
+                request_kind="initial_contact",
+                mission_state=MISSION_TRIAGE_DIALOGUE,
+                extra_context=data,
+            )
+            self.enqueue_vlm_request(request, reason=event, block_pipeline=True)
+            return
+
+        if event in {"request_vlm_triage", "triage_dialogue"}:
+            request = VLMRequest(
+                stt_text=str(data.get("stt_text", "요구조자의 상태를 매뉴얼 기준으로 판단해라.")),
+                request_kind="triage_dialogue",
+                mission_state=MISSION_TRIAGE_DIALOGUE,
+                extra_context=data,
+            )
+            self.enqueue_vlm_request(request, reason=event, block_pipeline=True)
+            return
+
+        if event in {"handoff_check", "verify_handoff"}:
+            request = VLMRequest(
+                stt_text="VLA 동작이 끝났다. 카메라를 보고 사람이 물건을 실제로 받았는지 확인해라.",
+                request_kind="verify_handoff",
+                mission_state=MISSION_VERIFY_HANDOFF,
+                extra_context=data,
+            )
+            self.enqueue_vlm_request(request, reason=event, block_pipeline=True)
+            return
+
+        if event in {"resume_search", "task_done"}:
+            self.publish_mission_state(MISSION_RESUME_SEARCH, reason=event)
+            self.publish_nav_intent(
+                "rotate_search",
+                mission_state=MISSION_RESUME_SEARCH,
+                reason=event,
+                source="mission_event",
+            )
+            self.publish_mission_state(MISSION_SEARCH_PERSON, reason="resume_search_done")
+            return
+
+        if bool(data.get("trigger_vlm", False)):
+            request = VLMRequest(
+                stt_text=str(data.get("stt_text", "현재 상황을 판단해라.")),
+                request_kind=str(data.get("request_kind", "mission_event")),
+                mission_state=str(data.get("mission_state", self.mission_state)).upper(),
+                extra_context=data,
+            )
+            self.enqueue_vlm_request(request, reason=event or "trigger_vlm", block_pipeline=True)
 
     def begin_pipeline_block(self, reason: str) -> None:
         with self.pipeline_lock:
@@ -1287,6 +1898,39 @@ class ZeriVLMSTTBridgeNode(Node):
             return
 
         if status == "succeeded":
+            if self.verify_handoff_after_vla_success:
+                with self.pipeline_lock:
+                    self.waiting_for_vla = False
+                    self.vla_active = False
+                    self.vla_deadline = 0.0
+                    self.active_vla_task_id = None
+
+                self.publish_led(self.led_on_vla_success)
+                self.publish_mission_state(
+                    MISSION_VERIFY_HANDOFF,
+                    reason="vla_succeeded",
+                )
+                self.publish_inference_status("vla_succeeded_start_handoff_verify")
+
+                request = VLMRequest(
+                    stt_text=(
+                        "VLA 동작이 끝났다. 카메라를 보고 사람이 물건을 "
+                        "실제로 받았는지 확인해라."
+                    ),
+                    request_kind="verify_handoff",
+                    mission_state=MISSION_VERIFY_HANDOFF,
+                    extra_context={
+                        "vla_status": data,
+                        "previous_task_id": task_id,
+                    },
+                )
+                self.enqueue_vlm_request(
+                    request,
+                    reason="vla_succeeded_handoff_verify",
+                    block_pipeline=False,
+                )
+                return
+
             self.publish_inference_status("vla_succeeded_returning_to_listen")
             self.finish_vla_and_maybe_release("vla_succeeded", success=True)
             return
@@ -1459,31 +2103,22 @@ class ZeriVLMSTTBridgeNode(Node):
         if accepted_text is None:
             return
 
-        self.begin_pipeline_block("accepted_stt_for_vlm")
-
         self.get_logger().info(
             f"Accepted STT text for VLM: raw='{raw_stt_text}', command='{accepted_text}'"
         )
         self.publish_inference_status("accepted_stt_text")
 
-        try:
-            self.text_queue.put_nowait(accepted_text)
-        except queue.Full:
-            try:
-                dropped = self.text_queue.get_nowait()
-                self.get_logger().warn(
-                    f"Dropped old STT text due to full queue: {dropped}"
-                )
-            except queue.Empty:
-                pass
-
-            try:
-                self.text_queue.put_nowait(accepted_text)
-            except queue.Full:
-                self.get_logger().error("Failed to enqueue STT text.")
-                self.publish_inference_status("queue_full_error")
-                self.publish_led(self.led_on_error)
-                self.release_pipeline_block("queue_full_error")
+        request = VLMRequest(
+            stt_text=accepted_text,
+            request_kind="stt_triage",
+            mission_state=MISSION_TRIAGE_DIALOGUE,
+            extra_context={"raw_stt_text": raw_stt_text},
+        )
+        self.enqueue_vlm_request(
+            request,
+            reason="accepted_stt_for_vlm",
+            block_pipeline=True,
+        )
 
     def get_latest_frames(
         self,
@@ -1518,6 +2153,9 @@ class ZeriVLMSTTBridgeNode(Node):
             "instruction": decision.vla_instruction,
             "task_duration_sec": decision.task_duration_sec,
             "timeout_sec": self.vla_timeout_sec,
+            "mission_state": decision.mission_state,
+            "selected_person_id": decision.selected_person_id,
+            "target_context": self.latest_target_context,
             "source": "zeri_vlm_stt_bridge_node",
         }
 
@@ -1531,6 +2169,7 @@ class ZeriVLMSTTBridgeNode(Node):
             self.vla_deadline = time.time() + self.vla_timeout_sec
             self.active_vla_task_id = task_id
 
+        self.publish_mission_state(MISSION_RUN_VLA, reason=f"vla_task_requested:{task_id}")
         self.publish_led(self.led_on_vla_running)
         self.publish_inference_status(f"vla_task_requested: {task_id}")
 
@@ -1541,10 +2180,12 @@ class ZeriVLMSTTBridgeNode(Node):
     def worker_loop(self) -> None:
         while not self.stop_event.is_set():
             try:
-                stt_text = self.text_queue.get(timeout=0.1)
+                request = self.text_queue.get(timeout=0.1)
             except queue.Empty:
                 continue
 
+            stt_text = request.stt_text
+            mission_context = self.build_mission_context(request)
             start_time = time.time()
 
             try:
@@ -1599,12 +2240,25 @@ class ZeriVLMSTTBridgeNode(Node):
                 decision = self.vlm.infer(
                     image=image,
                     stt_text=stt_text,
+                    request_kind=request.request_kind,
+                    mission_context=mission_context,
+                    request_mission_state=request.mission_state,
                 )
 
                 elapsed = time.time() - start_time
 
                 self.publish_inference_status("vlm_inference_done")
                 self.publish_led(decision.led_cmd)
+                self.publish_mission_state(decision.mission_state, reason="vlm_decision")
+                self.publish_nav_intent(
+                    decision.nav_intent,
+                    mission_state=decision.mission_state,
+                    selected_person_id=decision.selected_person_id,
+                    reason=decision.reason,
+                    source="vlm_decision",
+                )
+                self.publish_map_marker(decision, request)
+                self.publish_arm_home_request(decision)
 
                 camera_age_sec = None
                 if rgb_time is not None:
@@ -1636,6 +2290,9 @@ class ZeriVLMSTTBridgeNode(Node):
 
                 result = {
                     "stt_text": stt_text,
+                    "request_kind": request.request_kind,
+                    "mission_state": decision.mission_state,
+                    "selected_person_id": decision.selected_person_id,
                     "hazard_level": decision.hazard_level,
                     "scene_status": decision.scene_status,
                     "selected_task": decision.selected_task,
@@ -1651,7 +2308,13 @@ class ZeriVLMSTTBridgeNode(Node):
                     "vla_task_id": vla_task_id,
                     "vla_task_request_topic": self.vla_task_request_topic,
                     "vla_status_topic": self.vla_status_topic,
-                    "robot_control_mode": "ACT_RTC_TASK_REQUEST",
+                    "mission_state_topic": self.mission_state_topic,
+                    "nav_intent_topic": self.nav_intent_topic,
+                    "map_marker_topic": self.map_marker_topic,
+                    "arm_home_request_topic": self.arm_home_request_topic,
+                    "target_context": self.latest_target_context,
+                    "mission_context": mission_context,
+                    "robot_control_mode": "VLM_SUPERVISED_STATE_MACHINE",
                     "raw_cmd_vel_generated_by_vlm": False,
                     "latency_sec": round(elapsed, 3),
                     "camera_age_sec": camera_age_sec,
@@ -1689,6 +2352,8 @@ class ZeriVLMSTTBridgeNode(Node):
 
     def log_decision(self, decision: VLMDecision, vla_task_id: Optional[str]) -> None:
         self.get_logger().info("[VLM DECISION]")
+        self.get_logger().info(f"  mission_state: {decision.mission_state}")
+        self.get_logger().info(f"  selected_person_id: {decision.selected_person_id}")
         self.get_logger().info(f"  hazard_level: {decision.hazard_level}")
         self.get_logger().info(f"  scene_status: {decision.scene_status}")
         self.get_logger().info(f"  selected_task: {decision.selected_task}")
@@ -1701,6 +2366,11 @@ class ZeriVLMSTTBridgeNode(Node):
         self.get_logger().info(f"  vla_required: {decision.vla_required}")
         self.get_logger().info(f"  vla_instruction: {decision.vla_instruction}")
         self.get_logger().info(f"  vla_task_id: {vla_task_id}")
+        self.get_logger().info(f"  handoff_status: {decision.handoff_status}")
+        self.get_logger().info(f"  arm_home_required: {decision.arm_home_required}")
+        self.get_logger().info(f"  map_mark_required: {decision.map_mark_required}")
+        self.get_logger().info(f"  map_mark_type: {decision.map_mark_type}")
+        self.get_logger().info(f"  report_to_base: {decision.report_to_base}")
         self.get_logger().info(f"  reason: {decision.reason}")
         self.get_logger().info(f"  robot_speech: {decision.robot_speech}")
 
