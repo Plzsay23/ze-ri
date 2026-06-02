@@ -17,6 +17,10 @@ ARDUINO_PORT="${ARDUINO_PORT:-/dev/arduino}"
 LIDAR_PORT="${LIDAR_PORT:-/dev/lidar}"
 
 # RealSense
+# 카메라는 기본적으로 이 스크립트에서 실행하지 않습니다.
+# 별도 터미널에서 scripts/realsense_pointcloud.sh 를 먼저 실행하십시오.
+START_CAMERA="${START_CAMERA:-false}"
+WAIT_CAMERA_TOPICS="${WAIT_CAMERA_TOPICS:-true}"
 CAMERA_SERIAL="${CAMERA_SERIAL:-_944122071303}"
 RGB_TOPIC="${RGB_TOPIC:-/camera/camera/color/image_raw}"
 DEPTH_TOPIC="${DEPTH_TOPIC:-/camera/camera/aligned_depth_to_color/image_raw}"
@@ -156,6 +160,11 @@ say "Ze-Ri person follow + LiDAR/Depth safety drive"
 say "LOG_DIR=$LOG_DIR"
 say "ARDUINO_PORT=$ARDUINO_PORT"
 say "LIDAR_PORT=$LIDAR_PORT"
+say "START_CAMERA=$START_CAMERA"
+say "WAIT_CAMERA_TOPICS=$WAIT_CAMERA_TOPICS"
+say "RGB_TOPIC=$RGB_TOPIC"
+say "DEPTH_TOPIC=$DEPTH_TOPIC"
+say "POINTS_TOPIC=$POINTS_TOPIC"
 say "START_SLAM=$START_SLAM"
 say "SLAM_PARAMS_FILE=$SLAM_PARAMS_FILE"
 say "START_OCTOMAP=$START_OCTOMAP"
@@ -176,28 +185,43 @@ if [ ! -f "$ROOT/tools/depth_lidar_safety_guard.py" ]; then
 fi
 
 # =========================
-# 1. RealSense RGB-D + PointCloud
+# 1. Camera topic precheck
+#    기본값: 이 스크립트에서는 RealSense를 실행하지 않음
 # =========================
 
-SERIAL="$CAMERA_SERIAL" \
-start_node "01_realsense_pointcloud" \
-  bash "$ROOT/scripts/realsense_pointcloud.sh"
-
-wait_topic "$RGB_TOPIC" 20 || true
-wait_topic "$DEPTH_TOPIC" 20 || true
-
-# pointcloud는 없으면 런타임에서 한 번 더 강제 활성화
-if ! ros2 topic list | grep -q "points"; then
-  say "PointCloud topic not found. Forcing pointcloud__neon_.enable=true"
-  ros2 param set /camera/camera pointcloud__neon_.stream_filter 2 || true
-  ros2 param set /camera/camera pointcloud__neon_.stream_index_filter 0 || true
-  ros2 param set /camera/camera pointcloud__neon_.allow_no_texture_points false || true
-  ros2 param set /camera/camera pointcloud__neon_.enable true || true
-  sleep 1
+if [ "$START_CAMERA" = "true" ]; then
+  SERIAL="$CAMERA_SERIAL" \
+  start_node "01_realsense_pointcloud" \
+    bash "$ROOT/scripts/realsense_pointcloud.sh"
+else
+  say "SKIP RealSense start"
+  say "  camera must be started separately:"
+  say "  SERIAL=$CAMERA_SERIAL bash $ROOT/scripts/realsense_pointcloud.sh"
 fi
 
-say "Current point topics:"
-ros2 topic list | grep -E "point|points" || true
+if [ "$WAIT_CAMERA_TOPICS" = "true" ]; then
+  wait_topic "$RGB_TOPIC" 30 || true
+  wait_topic "$DEPTH_TOPIC" 30 || true
+  wait_topic "$CAMERA_INFO_TOPIC" 10 || true
+fi
+
+# PointCloud는 대시보드 3D 뷰용입니다.
+# 외부 카메라 노드가 이미 떠 있으면 파라미터만 보정합니다.
+if ! ros2 topic list 2>/dev/null | grep -qx "$POINTS_TOPIC"; then
+  if ros2 node list 2>/dev/null | grep -qx "/camera/camera"; then
+    say "PointCloud topic not found. Trying to enable pointcloud on existing camera node."
+    ros2 param set /camera/camera pointcloud__neon_.stream_filter 2 || true
+    ros2 param set /camera/camera pointcloud__neon_.stream_index_filter 0 || true
+    ros2 param set /camera/camera pointcloud__neon_.allow_no_texture_points false || true
+    ros2 param set /camera/camera pointcloud__neon_.enable true || true
+    sleep 1
+  else
+    say "WARN camera node not found. PointCloud topic unavailable: $POINTS_TOPIC"
+  fi
+fi
+
+say "Current camera topics:"
+ros2 topic list | grep -E "camera|point|points" || true
 
 # =========================
 # 2. LiDAR
