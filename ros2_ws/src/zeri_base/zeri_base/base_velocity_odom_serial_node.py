@@ -8,12 +8,11 @@ from rclpy.node import Node
 
 from geometry_msgs.msg import Twist, TransformStamped
 from nav_msgs.msg import Odometry
-
 from tf2_ros import TransformBroadcaster
 
 try:
     import serial
-except ImportError as e:
+except ImportError:
     serial = None
 
 
@@ -23,31 +22,17 @@ def clamp(x, lo, hi):
 
 def yaw_to_quat(yaw):
     half = yaw * 0.5
-    return {
-        "x": 0.0,
-        "y": 0.0,
-        "z": math.sin(half),
-        "w": math.cos(half),
-    }
+    return 0.0, 0.0, math.sin(half), math.cos(half)
 
 
-class BaseKeyOdomSerialNode(Node):
+class BaseVelocityOdomSerialNode(Node):
     """
-    /cmd_vel -> Arduino keyboard protocol + encoder odom.
+    /cmd_vel -> Arduino velocity line protocol + encoder odom.
 
-    Arduino protocol:
-      w/s : forward/backward
-      a/d : rotate left/right
-      q/e : strafe left/right
-      r/t : diagonal front-left/front-right
-      f/g : diagonal back-left/back-right
-      x   : stop
-
-    이 버전의 핵심:
-      - Arduino 코드는 그대로 둠
-      - linear.x + angular.z 동시 명령을 w/a/d 시간분할 키 스트림으로 변환
-      - YOLO person follow의 FORWARD_STEER_PERSON을 실제로 더 부드럽게 반영
-      - encoder line: ENC LF RF LR RR
+    Serial protocol to Arduino:
+      V <vx_norm> <vy_norm> <wz_norm>\n
+    where each value is in [-1, 1].
+    Arduino performs mecanum wheel mixing, so forward+turn is simultaneous.
     """
 
     def __init__(self):
@@ -55,7 +40,6 @@ class BaseKeyOdomSerialNode(Node):
 
         self.declare_parameter("port", "/dev/arduino")
         self.declare_parameter("baudrate", 115200)
-
         self.declare_parameter("cmd_topic", "/cmd_vel")
         self.declare_parameter("odom_topic", "/odom")
 
@@ -69,29 +53,29 @@ class BaseKeyOdomSerialNode(Node):
         self.declare_parameter("ly", 0.2125)
 
         self.declare_parameter("cmd_timeout_sec", 0.50)
-        self.declare_parameter("key_hz", 20.0)
+        self.declare_parameter("send_hz", 20.0)
 
-        self.declare_parameter("linear_deadband", 0.03)
-        self.declare_parameter("angular_deadband", 0.05)
-        self.declare_parameter("strafe_deadband", 0.03)
+        self.declare_parameter("max_linear_x", 0.25)
+        self.declare_parameter("max_linear_y", 0.25)
+        self.declare_parameter("max_angular_z", 0.70)
 
+        self.declare_parameter("linear_deadband", 0.02)
+        self.declare_parameter("angular_deadband", 0.04)
         self.declare_parameter("enable_strafe", False)
-        self.declare_parameter("enable_diagonal_keys", False)
 
-        # vx+wz 동시 명령에서 회전 키를 섞는 비율
-        self.declare_parameter("mixed_forward_turn", True)
-        self.declare_parameter("turn_mix_gain", 1.25)
-        self.declare_parameter("turn_mix_min_duty", 0.22)
-        self.declare_parameter("turn_mix_max_duty", 0.55)
-        self.declare_parameter("angular_ref", 0.45)
+        self.declare_parameter("invert_vx", False)
+        self.declare_parameter("invert_vy", False)
+        self.declare_parameter("invert_wz", False)
 
-        self.declare_parameter("log_sent_key", True)
-        self.declare_parameter("log_all_keys", False)
+        self.declare_parameter("arduino_pwm", 60)
+        self.declare_parameter("set_pwm_on_start", True)
+
+        self.declare_parameter("log_sent_command", True)
+        self.declare_parameter("log_all_commands", False)
         self.declare_parameter("log_encoder_line", False)
 
         self.port = str(self.get_parameter("port").value)
         self.baudrate = int(self.get_parameter("baudrate").value)
-
         self.cmd_topic = str(self.get_parameter("cmd_topic").value)
         self.odom_topic = str(self.get_parameter("odom_topic").value)
 
@@ -105,23 +89,25 @@ class BaseKeyOdomSerialNode(Node):
         self.ly = float(self.get_parameter("ly").value)
 
         self.cmd_timeout_sec = float(self.get_parameter("cmd_timeout_sec").value)
-        self.key_hz = float(self.get_parameter("key_hz").value)
+        self.send_hz = float(self.get_parameter("send_hz").value)
+
+        self.max_linear_x = float(self.get_parameter("max_linear_x").value)
+        self.max_linear_y = float(self.get_parameter("max_linear_y").value)
+        self.max_angular_z = float(self.get_parameter("max_angular_z").value)
 
         self.linear_deadband = float(self.get_parameter("linear_deadband").value)
         self.angular_deadband = float(self.get_parameter("angular_deadband").value)
-        self.strafe_deadband = float(self.get_parameter("strafe_deadband").value)
-
         self.enable_strafe = bool(self.get_parameter("enable_strafe").value)
-        self.enable_diagonal_keys = bool(self.get_parameter("enable_diagonal_keys").value)
 
-        self.mixed_forward_turn = bool(self.get_parameter("mixed_forward_turn").value)
-        self.turn_mix_gain = float(self.get_parameter("turn_mix_gain").value)
-        self.turn_mix_min_duty = float(self.get_parameter("turn_mix_min_duty").value)
-        self.turn_mix_max_duty = float(self.get_parameter("turn_mix_max_duty").value)
-        self.angular_ref = float(self.get_parameter("angular_ref").value)
+        self.invert_vx = bool(self.get_parameter("invert_vx").value)
+        self.invert_vy = bool(self.get_parameter("invert_vy").value)
+        self.invert_wz = bool(self.get_parameter("invert_wz").value)
 
-        self.log_sent_key = bool(self.get_parameter("log_sent_key").value)
-        self.log_all_keys = bool(self.get_parameter("log_all_keys").value)
+        self.arduino_pwm = int(self.get_parameter("arduino_pwm").value)
+        self.set_pwm_on_start = bool(self.get_parameter("set_pwm_on_start").value)
+
+        self.log_sent_command = bool(self.get_parameter("log_sent_command").value)
+        self.log_all_commands = bool(self.get_parameter("log_all_commands").value)
         self.log_encoder_line = bool(self.get_parameter("log_encoder_line").value)
 
         if serial is None:
@@ -140,136 +126,99 @@ class BaseKeyOdomSerialNode(Node):
 
         self.last_cmd = Twist()
         self.last_cmd_time = 0.0
-
-        self.last_key = None
-        self.stop_key_last_sent = 0.0
-        self.turn_mix_acc = 0.0
+        self.last_line = ""
+        self.last_zero_sent_time = 0.0
 
         self.prev_enc = None
 
         self.x = 0.0
         self.y = 0.0
         self.yaw = 0.0
-
         self.last_odom_stamp = self.get_clock().now()
 
-        self.cmd_sub = self.create_subscription(
-            Twist,
-            self.cmd_topic,
-            self.on_cmd,
-            10,
-        )
-
+        self.cmd_sub = self.create_subscription(Twist, self.cmd_topic, self.on_cmd, 10)
         self.odom_pub = self.create_publisher(Odometry, self.odom_topic, 10)
         self.tf_broadcaster = TransformBroadcaster(self)
 
+        if self.set_pwm_on_start:
+            self.write_line(f"P {self.arduino_pwm}\n", force_log=True)
+
         self.read_timer = self.create_timer(0.01, self.read_serial_once)
-        self.key_timer = self.create_timer(1.0 / max(self.key_hz, 1.0), self.send_key_once)
+        self.send_timer = self.create_timer(1.0 / max(self.send_hz, 1.0), self.send_velocity_once)
 
         self.get_logger().info(
-            "base key odom serial node started: "
-            f"port={self.port}, baudrate={self.baudrate}, "
-            f"cmd={self.cmd_topic}, odom={self.odom_topic}, "
-            f"key_hz={self.key_hz}, mixed_forward_turn={self.mixed_forward_turn}"
+            "base velocity odom serial node started: "
+            f"port={self.port}, baudrate={self.baudrate}, cmd={self.cmd_topic}, "
+            f"send_hz={self.send_hz}, max_x={self.max_linear_x}, max_wz={self.max_angular_z}, "
+            f"pwm={self.arduino_pwm}"
         )
 
     def now_sec(self):
         return self.get_clock().now().nanoseconds * 1e-9
 
-    def on_cmd(self, msg: Twist):
+    def on_cmd(self, msg):
         self.last_cmd = msg
         self.last_cmd_time = self.now_sec()
 
-    def write_key(self, key):
-        if not key:
-            key = "x"
-
+    def write_line(self, line, force_log=False):
         try:
-            self.ser.write(key.encode("ascii"))
+            self.ser.write(line.encode("ascii"))
             self.ser.flush()
         except Exception as e:
             self.get_logger().error(f"serial write failed: {repr(e)}")
             return
 
-        if self.log_sent_key:
-            if self.log_all_keys or key != self.last_key:
-                self.get_logger().info(f"sent key: {key}")
+        clean = line.strip()
+        if self.log_sent_command or force_log:
+            if self.log_all_commands or force_log or clean != self.last_line:
+                self.get_logger().info(f"sent: {clean}")
 
-        self.last_key = key
+        self.last_line = clean
 
-    def select_key_from_cmd(self, cmd):
+    def normalized_cmd(self, cmd):
         vx = float(cmd.linear.x)
         vy = float(cmd.linear.y)
         wz = float(cmd.angular.z)
 
-        has_vx = abs(vx) >= self.linear_deadband
-        has_vy = abs(vy) >= self.strafe_deadband
-        has_wz = abs(wz) >= self.angular_deadband
+        if abs(vx) < self.linear_deadband:
+            vx = 0.0
+        if abs(vy) < self.linear_deadband:
+            vy = 0.0
+        if abs(wz) < self.angular_deadband:
+            wz = 0.0
 
-        if not has_vx and not has_vy and not has_wz:
-            return "x"
+        if not self.enable_strafe:
+            vy = 0.0
 
-        forward_key = "w" if vx > 0.0 else "s"
-        turn_key = "a" if wz > 0.0 else "d"
-        strafe_key = "q" if vy > 0.0 else "e"
+        nx = vx / max(abs(self.max_linear_x), 1e-6)
+        ny = vy / max(abs(self.max_linear_y), 1e-6)
+        nw = wz / max(abs(self.max_angular_z), 1e-6)
 
-        # strafe는 지금 사람 추종에서는 꺼둠.
-        if has_vy and self.enable_strafe and not has_vx and not has_wz:
-            return strafe_key
+        if self.invert_vx:
+            nx = -nx
+        if self.invert_vy:
+            ny = -ny
+        if self.invert_wz:
+            nw = -nw
 
-        # 전진/후진 + 회전 동시 명령
-        if has_vx and has_wz and self.mixed_forward_turn:
-            ref = max(abs(self.angular_ref), 1e-6)
-            duty = clamp(
-                abs(wz) / ref * self.turn_mix_gain,
-                self.turn_mix_min_duty,
-                self.turn_mix_max_duty,
-            )
+        nx = clamp(nx, -1.0, 1.0)
+        ny = clamp(ny, -1.0, 1.0)
+        nw = clamp(nw, -1.0, 1.0)
 
-            self.turn_mix_acc += duty
+        return nx, ny, nw
 
-            if self.turn_mix_acc >= 1.0:
-                self.turn_mix_acc -= 1.0
-                return turn_key
-
-            return forward_key
-
-        # 대각선 키를 쓰고 싶을 때만 사용. 기본은 비활성.
-        if has_vx and has_vy and self.enable_diagonal_keys:
-            if vx > 0.0 and vy > 0.0:
-                return "r"  # front-left
-            if vx > 0.0 and vy < 0.0:
-                return "t"  # front-right
-            if vx < 0.0 and vy > 0.0:
-                return "f"  # back-left
-            if vx < 0.0 and vy < 0.0:
-                return "g"  # back-right
-
-        if has_wz and not has_vx:
-            return turn_key
-
-        if has_vx:
-            return forward_key
-
-        if has_vy and self.enable_strafe:
-            return strafe_key
-
-        return "x"
-
-    def send_key_once(self):
+    def send_velocity_once(self):
         now = self.now_sec()
-
         cmd_fresh = (now - self.last_cmd_time) <= self.cmd_timeout_sec
 
         if not cmd_fresh:
-            # timeout 때는 x를 너무 많이 찍지 않도록 주기 제한
-            if self.last_key != "x" or now - self.stop_key_last_sent > 0.5:
-                self.write_key("x")
-                self.stop_key_last_sent = now
+            if now - self.last_zero_sent_time > 0.20:
+                self.write_line("V 0.000 0.000 0.000\n")
+                self.last_zero_sent_time = now
             return
 
-        key = self.select_key_from_cmd(self.last_cmd)
-        self.write_key(key)
+        nx, ny, nw = self.normalized_cmd(self.last_cmd)
+        self.write_line(f"V {nx:.3f} {ny:.3f} {nw:.3f}\n")
 
     def read_serial_once(self):
         try:
@@ -287,17 +236,11 @@ class BaseKeyOdomSerialNode(Node):
 
                 if line.startswith("ENC "):
                     self.handle_encoder_line(line)
-                else:
-                    # READY 등 일반 메시지
-                    if self.log_encoder_line:
-                        self.get_logger().info(f"arduino: {line}")
-
         except Exception as e:
             self.get_logger().warn(f"serial read failed: {repr(e)}")
 
     def handle_encoder_line(self, line):
         parts = line.split()
-
         if len(parts) != 5:
             return
 
@@ -320,7 +263,6 @@ class BaseKeyOdomSerialNode(Node):
         drf = rf - self.prev_enc[1]
         dlr = lr - self.prev_enc[2]
         drr = rr - self.prev_enc[3]
-
         self.prev_enc = enc
 
         meters_per_tick = (2.0 * math.pi * self.wheel_radius) / max(self.ticks_per_rev, 1e-6)
@@ -330,8 +272,6 @@ class BaseKeyOdomSerialNode(Node):
         rl = dlr * meters_per_tick
         rr_m = drr * meters_per_tick
 
-        # Mecanum forward/right/yaw body delta.
-        # encoder line은 LF RF LR RR 순서.
         dx_body = (fl + fr + rl + rr_m) * 0.25
         dy_body = (-fl + fr + rl - rr_m) * 0.25
 
@@ -354,14 +294,12 @@ class BaseKeyOdomSerialNode(Node):
 
     def publish_odom(self, dx_body, dy_body, dyaw):
         stamp = self.get_clock().now()
-
         dt = (stamp.nanoseconds - self.last_odom_stamp.nanoseconds) * 1e-9
         if dt <= 1e-6:
             dt = 1e-6
-
         self.last_odom_stamp = stamp
 
-        q = yaw_to_quat(self.yaw)
+        qx, qy, qz, qw = yaw_to_quat(self.yaw)
 
         odom = Odometry()
         odom.header.stamp = stamp.to_msg()
@@ -371,17 +309,15 @@ class BaseKeyOdomSerialNode(Node):
         odom.pose.pose.position.x = self.x
         odom.pose.pose.position.y = self.y
         odom.pose.pose.position.z = 0.0
-
-        odom.pose.pose.orientation.x = q["x"]
-        odom.pose.pose.orientation.y = q["y"]
-        odom.pose.pose.orientation.z = q["z"]
-        odom.pose.pose.orientation.w = q["w"]
+        odom.pose.pose.orientation.x = qx
+        odom.pose.pose.orientation.y = qy
+        odom.pose.pose.orientation.z = qz
+        odom.pose.pose.orientation.w = qw
 
         odom.twist.twist.linear.x = dx_body / dt
         odom.twist.twist.linear.y = dy_body / dt
         odom.twist.twist.angular.z = dyaw / dt
 
-        # 대충 안정적인 covariance
         odom.pose.covariance[0] = 0.05
         odom.pose.covariance[7] = 0.05
         odom.pose.covariance[35] = 0.10
@@ -396,38 +332,31 @@ class BaseKeyOdomSerialNode(Node):
             tf.header.stamp = stamp.to_msg()
             tf.header.frame_id = self.odom_frame_id
             tf.child_frame_id = self.base_frame_id
-
             tf.transform.translation.x = self.x
             tf.transform.translation.y = self.y
             tf.transform.translation.z = 0.0
-
-            tf.transform.rotation.x = q["x"]
-            tf.transform.rotation.y = q["y"]
-            tf.transform.rotation.z = q["z"]
-            tf.transform.rotation.w = q["w"]
-
+            tf.transform.rotation.x = qx
+            tf.transform.rotation.y = qy
+            tf.transform.rotation.z = qz
+            tf.transform.rotation.w = qw
             self.tf_broadcaster.sendTransform(tf)
 
     def destroy_node(self):
         try:
-            self.write_key("x")
+            self.write_line("V 0.000 0.000 0.000\n", force_log=True)
         except Exception:
             pass
-
         try:
             if hasattr(self, "ser") and self.ser is not None:
                 self.ser.close()
         except Exception:
             pass
-
         super().destroy_node()
 
 
 def main(args=None):
     rclpy.init(args=args)
-
-    node = BaseKeyOdomSerialNode()
-
+    node = BaseVelocityOdomSerialNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

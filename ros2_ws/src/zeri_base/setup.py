@@ -13,20 +13,12 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='hansungai',
-    maintainer_email='yjhanna3@hansung.ac.kr',
-    description='TODO: Package description',
-    license='TODO: License declaration',
-    extras_require={
-        'test': [
-            'pytest',
-        ],
-    },
+    maintainer='zeri',
+    maintainer_email='zeri@example.com',
+    description='Ze-Ri serial mobile base bridge and odometry',
+    license='MIT',
     entry_points={
         'console_scripts': [
-            'cmd_vel_serial_node = zeri_base.cmd_vel_serial_node:main',
-            'cmd_vel_safety_node = zeri_base.cmd_vel_safety_node:main',
-            'cmd_vel_key_serial_node = zeri_base.cmd_vel_key_serial_node:main',
             'base_key_odom_serial_node = zeri_base.base_key_odom_serial_node:main',
         ],
     },

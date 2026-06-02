@@ -162,7 +162,7 @@ start_node "04_voice_stop_guard" \
     -p clear_distance:="$LIDAR_CLEAR_DISTANCE"
 
 start_node "05_base_key_odom" \
-  ros2 run zeri_base base_key_odom_serial_node --ros-args \
+  "$HOME/ze-ri/ros2_ws/install/zeri_base/bin/base_key_odom_serial_node" --ros-args \
     -p port:="$ARDUINO_PORT" \
     -p baudrate:=115200 \
     -p cmd_topic:=/cmd_vel \
@@ -171,7 +171,15 @@ start_node "05_base_key_odom" \
     -p wheel_radius:=0.075 \
     -p lx:=0.1575 \
     -p ly:=0.2125 \
-    -p log_sent_key:=true \
+    -p send_hz:=20.0 \
+    -p max_linear_x:=0.25 \
+    -p max_linear_y:=0.25 \
+    -p max_angular_z:=0.70 \
+    -p enable_strafe:=false \
+    -p arduino_pwm:=60 \
+    -p set_pwm_on_start:=true \
+    -p log_sent_command:=true \
+    -p log_all_commands:=false \
     -p log_encoder_line:=false
 
 start_node "06_slam_toolbox" \
