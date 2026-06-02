@@ -22,6 +22,7 @@ setup(
             'realsense_rgbd_node = zeri_camera.realsense_rgbd_node:main',
             'camera_depth_follow_node = zeri_camera.camera_depth_follow_node:main',
             'camera_person_follow_node = zeri_camera.camera_person_follow_node:main',
+            'person_map_marker_node = zeri_camera.person_map_marker_node:main',
         ],
     },
 )
