@@ -1459,11 +1459,20 @@ class RosMultiPolicyGateRobotClient(RobotClient):
             self.stop_requested_event.clear()
             self.home_return_running_event.clear()
             self.must_go.set()
+            try:
+                self._publish_home_return_finished_status()
+            except Exception as e:
+                self.logger.warning(f"[raw-home] failed to publish home completion status: {e}")
 
     def _run_home_return_blocking(self) -> None:
         if self.zeri_home_raw_ticks:
             return self._run_raw_home_return_blocking()
-        return super()._run_home_return_blocking()
+        result = super()._run_home_return_blocking()
+        try:
+            self._publish_home_return_finished_status()
+        except Exception as e:
+            self.logger.warning(f"[stop-home] failed to publish home completion status: {e}")
+        return result
 
     def __init__(self, config: RobotClientConfig):
         super().__init__(config)
@@ -1478,6 +1487,23 @@ class RosMultiPolicyGateRobotClient(RobotClient):
         self.zeri_auto_home_on_done = _env_bool("ZERI_AUTO_HOME_ON_DONE", False)
         self.zeri_allow_keyword_route = _env_bool("ZERI_ALLOW_KEYWORD_ROUTE", True)
         self.zeri_status_heartbeat_sec = _env_float("ZERI_STATUS_HEARTBEAT_SEC", 1.0)
+
+        # VLA handoff verification support.
+        # The wrist camera is owned by this VLA client, so the client publishes
+        # its latest observation frame to ROS when the policy rollout reaches
+        # the handoff pose. VLM must subscribe to the topic, not open the device.
+        self.zeri_wrist_snapshot_topic = os.environ.get(
+            "ZERI_WRIST_SNAPSHOT_TOPIC",
+            f"/zeri/vla/{self.zeri_client_name}/wrist_snapshot",
+        ).strip()
+        self.zeri_publish_wrist_snapshot_on_done = _env_bool(
+            "ZERI_PUBLISH_WRIST_SNAPSHOT_ON_DONE",
+            True,
+        )
+        self.zeri_handoff_wait_timeout_sec = _env_float(
+            "ZERI_HANDOFF_WAIT_TIMEOUT_SEC",
+            30.0,
+        )
 
         self.zeri_home_raw_ticks_path = os.environ.get("ZERI_HOME_RAW_TICKS_JSON", "").strip()
         self.zeri_home_raw_ticks = self._load_raw_home_ticks(self.zeri_home_raw_ticks_path)
@@ -1494,16 +1520,26 @@ class RosMultiPolicyGateRobotClient(RobotClient):
         self._active_started_at: float = 0.0
         self._active_deadline: float = 0.0
         self._active_timeout_deadline: float = 0.0
+        self._active_handoff_reached: bool = False
         self._last_status_heartbeat_at: float = 0.0
+
+        self._home_return_request_id: str | None = None
+        self._home_return_policy_id: str | None = None
+        self._home_return_task_text: str | None = None
+        self._home_return_started_at: float = 0.0
 
         self._ros_node = None
         self._ros_status_pub = None
+        self._ros_wrist_snapshot_pub = None
 
         self.logger.info(
             f"[ros-gate] client_name={self.zeri_client_name} | "
             f"command_topic={self.zeri_command_topic} | stop_topic={self.zeri_stop_topic} | "
             f"status_topic={self.zeri_status_topic} | default_duration={self.zeri_default_run_duration_sec} | "
-            f"default_timeout={self.zeri_default_timeout_sec}"
+            f"default_timeout={self.zeri_default_timeout_sec} | "
+            f"wrist_snapshot_topic={self.zeri_wrist_snapshot_topic} | "
+            f"publish_snapshot_on_done={self.zeri_publish_wrist_snapshot_on_done} | "
+            f"handoff_wait_timeout={self.zeri_handoff_wait_timeout_sec}"
         )
 
     def _valid_policy_ids(self) -> set[str]:
@@ -1616,6 +1652,150 @@ class RosMultiPolicyGateRobotClient(RobotClient):
         latest_obs = self._get_latest_raw_observation()
         return self.router.select(task_text, latest_obs)
 
+    @staticmethod
+    def _pil_rgb_to_ros_image_msg(image: Any, stamp: Any, frame_id: str) -> Any:
+        """Convert PIL image to sensor_msgs/Image without cv_bridge."""
+        from sensor_msgs.msg import Image as RosImage
+        import numpy as np
+
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+
+        arr = np.asarray(image, dtype=np.uint8)
+        arr = np.ascontiguousarray(arr)
+
+        msg = RosImage()
+        msg.header.stamp = stamp
+        msg.header.frame_id = frame_id
+        msg.height = int(arr.shape[0])
+        msg.width = int(arr.shape[1])
+        msg.encoding = "rgb8"
+        msg.is_bigendian = False
+        msg.step = int(arr.shape[1] * 3)
+        msg.data = arr.tobytes()
+        return msg
+
+    def _publish_wrist_snapshot(self, reason: str) -> bool:
+        """Publish the latest VLA-owned wrist frame for VLM handoff verification."""
+        if not self.zeri_publish_wrist_snapshot_on_done:
+            return False
+
+        pub = self._ros_wrist_snapshot_pub
+        if pub is None:
+            self.logger.warning("[handoff] wrist snapshot publisher is not ready yet")
+            return False
+
+        raw_observation = self._get_latest_raw_observation()
+        if not raw_observation:
+            self.logger.warning("[handoff] no latest observation; cannot publish wrist snapshot")
+            return False
+
+        image = _extract_first_image(raw_observation)
+        pil_image = _to_pil_image(image)
+        if pil_image is None:
+            self.logger.warning(
+                f"[handoff] failed to extract image from observation keys="
+                f"{sorted(list(raw_observation.keys()))}"
+            )
+            return False
+
+        try:
+            stamp = self._ros_node.get_clock().now().to_msg() if self._ros_node is not None else None
+            if stamp is None:
+                return False
+            msg = self._pil_rgb_to_ros_image_msg(
+                pil_image,
+                stamp=stamp,
+                frame_id=f"{self.zeri_client_name}_wrist_snapshot",
+            )
+            pub.publish(msg)
+            self.logger.warning(
+                f"[handoff] published wrist snapshot | topic={self.zeri_wrist_snapshot_topic} | "
+                f"reason={reason}"
+            )
+            return True
+        except Exception as e:
+            self.logger.warning(f"[handoff] failed to publish wrist snapshot: {e}")
+            return False
+
+    def _mark_handoff_pose_reached(self, reason: str) -> None:
+        """Pause policy action at handoff pose and wait for VLM verification/home."""
+        with self._active_lock:
+            request_id = self._active_request_id
+            policy_id = self._active_policy_id
+            task_text = self._active_task_text
+            if request_id is None:
+                return
+            self._active_handoff_reached = True
+            self._active_deadline = 0.0
+
+        self._clear_action_queue_and_pause()
+        snapshot_ok = self._publish_wrist_snapshot(reason)
+
+        extra = {
+            "snapshot_topic": self.zeri_wrist_snapshot_topic,
+            "snapshot_published": snapshot_ok,
+            "handoff_wait_timeout_sec": self.zeri_handoff_wait_timeout_sec,
+            "auto_home_on_done": self.zeri_auto_home_on_done,
+        }
+
+        self._publish_status(
+            "handoff_pose_reached",
+            reason,
+            request_id=request_id,
+            policy_id=policy_id,
+            task=task_text,
+            extra=extra,
+        )
+        self._publish_status(
+            "awaiting_handoff_verify",
+            "waiting_for_vlm_handoff_verification",
+            request_id=request_id,
+            policy_id=policy_id,
+            task=task_text,
+            extra=extra,
+        )
+
+        if self.zeri_auto_home_on_done:
+            self.logger.warning(
+                "[handoff] ZERI_AUTO_HOME_ON_DONE is true; home will start immediately. "
+                "For VLM handoff verification, set --zeri_auto_home_on_done=false."
+            )
+            self._handle_stop_request("auto_home_after_handoff_pose_reached")
+
+    def _publish_home_return_finished_status(self) -> None:
+        with self._active_lock:
+            request_id = self._home_return_request_id
+            policy_id = self._home_return_policy_id
+            task_text = self._home_return_task_text
+            started_at = self._home_return_started_at
+
+            self._home_return_request_id = None
+            self._home_return_policy_id = None
+            self._home_return_task_text = None
+            self._home_return_started_at = 0.0
+
+        elapsed = round(time.time() - started_at, 3) if started_at > 0.0 else None
+        extra = {"home_return_elapsed_sec": elapsed}
+
+        self._publish_status(
+            "home_return_finished",
+            "home_return_finished",
+            request_id=request_id,
+            policy_id=policy_id,
+            task=task_text,
+            extra=extra,
+        )
+        self._publish_status(
+            "succeeded",
+            "handoff_verified_and_home_return_finished",
+            request_id=request_id,
+            policy_id=policy_id,
+            task=task_text,
+            extra=extra,
+        )
+        self._publish_status("idle", "waiting_for_next_command")
+
     def _clear_action_queue_and_pause(self) -> None:
         self.route_ready_event.clear()
 
@@ -1638,6 +1818,7 @@ class RosMultiPolicyGateRobotClient(RobotClient):
             self._active_started_at = 0.0
             self._active_deadline = 0.0
             self._active_timeout_deadline = 0.0
+            self._active_handoff_reached = False
 
         self._clear_action_queue_and_pause()
 
@@ -1729,6 +1910,7 @@ class RosMultiPolicyGateRobotClient(RobotClient):
             self._active_started_at = now
             self._active_deadline = now + duration_sec if duration_sec > 0.0 else 0.0
             self._active_timeout_deadline = now + timeout_sec if timeout_sec > 0.0 else 0.0
+            self._active_handoff_reached = False
 
         self._publish_status(
             "accepted",
@@ -1757,25 +1939,31 @@ class RosMultiPolicyGateRobotClient(RobotClient):
 
     def _handle_stop_request(self, reason: str = "stop_requested") -> None:
         with self._active_lock:
-            request_id = self._active_request_id
-            policy_id = self._active_policy_id
-            task_text = self._active_task_text
+            request_id = self._active_request_id or self._home_return_request_id
+            policy_id = self._active_policy_id or self._home_return_policy_id
+            task_text = self._active_task_text or self._home_return_task_text
+
+            self._home_return_request_id = request_id
+            self._home_return_policy_id = policy_id
+            self._home_return_task_text = task_text
+            self._home_return_started_at = time.time()
+
             self._active_request_id = None
             self._active_policy_id = None
             self._active_task_text = None
             self._active_started_at = 0.0
             self._active_deadline = 0.0
             self._active_timeout_deadline = 0.0
+            self._active_handoff_reached = False
 
         self._publish_status(
-            "stopping",
+            "home_return_started",
             reason,
             request_id=request_id,
             policy_id=policy_id,
             task=task_text,
         )
         self._request_stop_and_home()
-        self._publish_status("idle", "stop_requested_waiting_for_next_command")
 
     def _ros_command_callback(self, msg: Any) -> None:
         self._handle_command_text(str(msg.data))
@@ -1793,13 +1981,14 @@ class RosMultiPolicyGateRobotClient(RobotClient):
             request_id = self._active_request_id
             deadline = self._active_deadline
             timeout_deadline = self._active_timeout_deadline
+            handoff_reached = self._active_handoff_reached
             last_heartbeat = self._last_status_heartbeat_at
 
             if request_id is not None:
                 if timeout_deadline > 0.0 and now >= timeout_deadline:
                     should_finish = ("timeout", "timeout_deadline_elapsed")
-                elif deadline > 0.0 and now >= deadline:
-                    should_finish = ("succeeded", "duration_elapsed")
+                elif deadline > 0.0 and now >= deadline and not handoff_reached:
+                    should_finish = ("handoff_pose_reached", "duration_elapsed")
 
                 if now - last_heartbeat >= self.zeri_status_heartbeat_sec:
                     self._last_status_heartbeat_at = now
@@ -1811,11 +2000,16 @@ class RosMultiPolicyGateRobotClient(RobotClient):
 
         if should_finish is not None:
             status, reason = should_finish
-            self._finish_active_request(status, reason)
+            if status == "handoff_pose_reached":
+                self._mark_handoff_pose_reached(reason)
+            else:
+                self._finish_active_request(status, reason)
             return
 
         if do_heartbeat:
-            self._publish_status("running", "heartbeat")
+            with self._active_lock:
+                heartbeat_status = "awaiting_handoff_verify" if self._active_handoff_reached else "running"
+            self._publish_status(heartbeat_status, "heartbeat")
 
     def prompt_router_loop(self):
         """ROS command loop replacing keyboard prompt loop."""
@@ -1836,6 +2030,16 @@ class RosMultiPolicyGateRobotClient(RobotClient):
         node_name = re.sub(r"[^a-zA-Z0-9_]", "_", f"{self.zeri_client_name}_ros_gate")
         self._ros_node = rclpy.create_node(node_name)
         self._ros_status_pub = self._ros_node.create_publisher(String, self.zeri_status_topic, 10)
+        try:
+            from sensor_msgs.msg import Image as RosImage
+            self._ros_wrist_snapshot_pub = self._ros_node.create_publisher(
+                RosImage,
+                self.zeri_wrist_snapshot_topic,
+                1,
+            )
+        except Exception as e:
+            self.logger.warning(f"[handoff] failed to create wrist snapshot publisher: {e}")
+            self._ros_wrist_snapshot_pub = None
         self._ros_node.create_subscription(String, self.zeri_command_topic, self._ros_command_callback, 10)
         self._ros_node.create_subscription(String, self.zeri_stop_topic, self._ros_stop_callback, 10)
         self._ros_node.create_timer(0.1, self._ros_supervisor_timer)
@@ -1847,13 +2051,16 @@ class RosMultiPolicyGateRobotClient(RobotClient):
                 "command_topic": self.zeri_command_topic,
                 "stop_topic": self.zeri_stop_topic,
                 "status_topic": self.zeri_status_topic,
+                "wrist_snapshot_topic": self.zeri_wrist_snapshot_topic,
+                "publish_wrist_snapshot_on_done": self.zeri_publish_wrist_snapshot_on_done,
                 "available_policy_ids": sorted(list(self._valid_policy_ids())),
             },
         )
 
         self.logger.info(
             f"[ros-gate] spinning | command={self.zeri_command_topic} | "
-            f"stop={self.zeri_stop_topic} | status={self.zeri_status_topic}"
+            f"stop={self.zeri_stop_topic} | status={self.zeri_status_topic} | "
+            f"wrist_snapshot={self.zeri_wrist_snapshot_topic}"
         )
 
         try:
@@ -1898,6 +2105,9 @@ def _extract_zeri_cli_args_to_env() -> None:
     parser.add_argument("--zeri_allow_keyword_route")
     parser.add_argument("--zeri_status_heartbeat_sec")
     parser.add_argument("--zeri_home_raw_ticks_json")
+    parser.add_argument("--zeri_wrist_snapshot_topic")
+    parser.add_argument("--zeri_publish_wrist_snapshot_on_done")
+    parser.add_argument("--zeri_handoff_wait_timeout_sec")
 
     args, remaining = parser.parse_known_args()
 
@@ -1913,6 +2123,9 @@ def _extract_zeri_cli_args_to_env() -> None:
         "zeri_allow_keyword_route": "ZERI_ALLOW_KEYWORD_ROUTE",
         "zeri_status_heartbeat_sec": "ZERI_STATUS_HEARTBEAT_SEC",
         "zeri_home_raw_ticks_json": "ZERI_HOME_RAW_TICKS_JSON",
+        "zeri_wrist_snapshot_topic": "ZERI_WRIST_SNAPSHOT_TOPIC",
+        "zeri_publish_wrist_snapshot_on_done": "ZERI_PUBLISH_WRIST_SNAPSHOT_ON_DONE",
+        "zeri_handoff_wait_timeout_sec": "ZERI_HANDOFF_WAIT_TIMEOUT_SEC",
     }
 
     for attr, env_name in mapping.items():

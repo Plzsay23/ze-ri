@@ -44,7 +44,7 @@ from typing import Any
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 
 
 @dataclass(frozen=True)
@@ -115,19 +115,29 @@ class VlaTaskRouterMultiNode(Node):
 
         self.declare_parameter("task_request_topic", "/zeri/vla/task_request")
         self.declare_parameter("global_status_topic", "/zeri/vla/status")
+        # Backward-compatible alias used by start_vla.sh.
+        self.declare_parameter("vla_status_topic", "")
         self.declare_parameter("left_command_topic", "/zeri/vla/left/command")
         self.declare_parameter("right_command_topic", "/zeri/vla/right/command")
         self.declare_parameter("left_status_topic", "/zeri/vla/left/status")
         self.declare_parameter("right_status_topic", "/zeri/vla/right/status")
+        self.declare_parameter("left_stop_topic", "/zeri/vla/left/stop")
+        self.declare_parameter("right_stop_topic", "/zeri/vla/right/stop")
+        self.declare_parameter("arm_home_request_topic", "/zeri/arm/home_request")
         self.declare_parameter("route_manifest_path", "")
         self.declare_parameter("reject_unknown_task", True)
 
         self.task_request_topic = self.get_parameter("task_request_topic").value
-        self.global_status_topic = self.get_parameter("global_status_topic").value
+        global_status_topic = str(self.get_parameter("global_status_topic").value)
+        vla_status_topic = str(self.get_parameter("vla_status_topic").value).strip()
+        self.global_status_topic = vla_status_topic or global_status_topic
         self.left_command_topic = self.get_parameter("left_command_topic").value
         self.right_command_topic = self.get_parameter("right_command_topic").value
         self.left_status_topic = self.get_parameter("left_status_topic").value
         self.right_status_topic = self.get_parameter("right_status_topic").value
+        self.left_stop_topic = self.get_parameter("left_stop_topic").value
+        self.right_stop_topic = self.get_parameter("right_stop_topic").value
+        self.arm_home_request_topic = self.get_parameter("arm_home_request_topic").value
         self.route_manifest_path = self.get_parameter("route_manifest_path").value
         self.reject_unknown_task = bool(self.get_parameter("reject_unknown_task").value)
 
@@ -140,10 +150,17 @@ class VlaTaskRouterMultiNode(Node):
         self.right_status_sub = self.create_subscription(
             String, self.right_status_topic, lambda msg: self.client_status_callback("right", msg), 10
         )
+        self.arm_home_sub = self.create_subscription(
+            Bool, self.arm_home_request_topic, self.arm_home_request_callback, 10
+        )
 
         self.left_pub = self.create_publisher(String, self.left_command_topic, 10)
         self.right_pub = self.create_publisher(String, self.right_command_topic, 10)
+        self.left_stop_pub = self.create_publisher(String, self.left_stop_topic, 10)
+        self.right_stop_pub = self.create_publisher(String, self.right_stop_topic, 10)
         self.status_pub = self.create_publisher(String, self.global_status_topic, 10)
+
+        self.active_request: dict[str, Any] | None = None
 
         self.publish_status("idle", "router_ready", extra={"routes": self.describe_routes()})
 
@@ -151,6 +168,9 @@ class VlaTaskRouterMultiNode(Node):
         self.get_logger().info(f"  request:      {self.task_request_topic}")
         self.get_logger().info(f"  left command: {self.left_command_topic}")
         self.get_logger().info(f"  right command:{self.right_command_topic}")
+        self.get_logger().info(f"  left stop:    {self.left_stop_topic}")
+        self.get_logger().info(f"  right stop:   {self.right_stop_topic}")
+        self.get_logger().info(f"  arm home req: {self.arm_home_request_topic}")
         self.get_logger().info(f"  status:       {self.global_status_topic}")
         self.get_logger().info(f"  routes:       {self.describe_routes()}")
 
@@ -263,6 +283,17 @@ class VlaTaskRouterMultiNode(Node):
         out = String()
         out.data = json.dumps(command, ensure_ascii=False)
 
+        self.active_request = {
+            "request_id": request_id,
+            "selected_task": selected_task,
+            "arm": spec.arm,
+            "policy_id": policy_id,
+            "task": task_for_policy,
+            "started_at": time.time(),
+            "duration_sec": duration_sec,
+            "timeout_sec": timeout_sec,
+        }
+
         if spec.arm == "left":
             self.left_pub.publish(out)
         elif spec.arm == "right":
@@ -288,6 +319,54 @@ class VlaTaskRouterMultiNode(Node):
             extra={"command": command},
         )
 
+    def arm_home_request_callback(self, msg: Bool) -> None:
+        if not bool(msg.data):
+            return
+
+        active = self.active_request
+        if not active:
+            self.publish_status(
+                "home_request_ignored",
+                "no_active_vla_request",
+                extra={"arm_home_request_topic": self.arm_home_request_topic},
+            )
+            return
+
+        arm = str(active.get("arm") or "").strip().lower()
+        request_id = str(active.get("request_id") or "")
+        selected_task = str(active.get("selected_task") or "")
+        policy_id = str(active.get("policy_id") or "")
+
+        out = String()
+        out.data = "home"
+
+        if arm == "left":
+            self.left_stop_pub.publish(out)
+            stop_topic = self.left_stop_topic
+        elif arm == "right":
+            self.right_stop_pub.publish(out)
+            stop_topic = self.right_stop_topic
+        else:
+            self.publish_status(
+                "home_request_rejected",
+                "invalid_active_arm",
+                selected_task=selected_task,
+                arm=arm,
+                policy_id=policy_id,
+                request_id=request_id,
+            )
+            return
+
+        self.publish_status(
+            "home_requested",
+            "arm_home_request_forwarded_to_active_client",
+            selected_task=selected_task,
+            arm=arm,
+            policy_id=policy_id,
+            request_id=request_id,
+            extra={"stop_topic": stop_topic},
+        )
+
     def client_status_callback(self, arm: str, msg: String) -> None:
         try:
             payload = json.loads(msg.data)
@@ -297,6 +376,12 @@ class VlaTaskRouterMultiNode(Node):
         payload["source"] = "vla_task_router_multi_node"
         payload["arm"] = arm
         payload["stamp_sec_router"] = time.time()
+
+        status = str(payload.get("status") or "").strip()
+        if status in {"succeeded", "failed", "timeout", "rejected"}:
+            active = self.active_request
+            if active and str(active.get("request_id") or "") == str(payload.get("request_id") or ""):
+                self.active_request = None
 
         out = String()
         out.data = json.dumps(payload, ensure_ascii=False)

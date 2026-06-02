@@ -19,7 +19,6 @@ LIDAR_PORT="${LIDAR_PORT:-/dev/lidar}"
 # RealSense
 # 카메라는 기본적으로 이 스크립트에서 실행하지 않습니다.
 # 별도 터미널에서 scripts/realsense_pointcloud.sh 를 먼저 실행하십시오.
-START_CAMERA="${START_CAMERA:-false}"
 WAIT_CAMERA_TOPICS="${WAIT_CAMERA_TOPICS:-true}"
 CAMERA_SERIAL="${CAMERA_SERIAL:-_944122071303}"
 RGB_TOPIC="${RGB_TOPIC:-/camera/camera/color/image_raw}"
@@ -33,6 +32,9 @@ CMD_OUT_TOPIC="${CMD_OUT_TOPIC:-/cmd_vel}"
 SCAN_TOPIC="${SCAN_TOPIC:-/scan_front}"
 PERSON_STATE_TOPIC="${PERSON_STATE_TOPIC:-/zeri/person_follow/state}"
 SAFETY_STATE_TOPIC="${SAFETY_STATE_TOPIC:-/zeri/safety_guard/state}"
+MISSION_EVENT_TOPIC="${MISSION_EVENT_TOPIC:-/zeri/mission/event}"
+ARRIVAL_EVENT_COOLDOWN_SEC="${ARRIVAL_EVENT_COOLDOWN_SEC:-30.0}"
+ARRIVAL_EVENT_STABLE_SEC="${ARRIVAL_EVENT_STABLE_SEC:-1.0}"
 
 # Optional visualization / mapping
 START_SLAM="${START_SLAM:-true}"
@@ -160,7 +162,6 @@ say "Ze-Ri person follow + LiDAR/Depth safety drive"
 say "LOG_DIR=$LOG_DIR"
 say "ARDUINO_PORT=$ARDUINO_PORT"
 say "LIDAR_PORT=$LIDAR_PORT"
-say "START_CAMERA=$START_CAMERA"
 say "WAIT_CAMERA_TOPICS=$WAIT_CAMERA_TOPICS"
 say "RGB_TOPIC=$RGB_TOPIC"
 say "DEPTH_TOPIC=$DEPTH_TOPIC"
@@ -184,40 +185,27 @@ if [ ! -f "$ROOT/tools/depth_lidar_safety_guard.py" ]; then
   exit 1
 fi
 
+if [ ! -f "$ROOT/tools/person_arrival_event_bridge.py" ]; then
+  say "ERROR missing: $ROOT/tools/person_arrival_event_bridge.py"
+  say "먼저 person_arrival_event_bridge.py 파일을 만들어야 합니다."
+  exit 1
+fi
+
 # =========================
 # 1. Camera topic precheck
 #    기본값: 이 스크립트에서는 RealSense를 실행하지 않음
 # =========================
 
-if [ "$START_CAMERA" = "true" ]; then
-  SERIAL="$CAMERA_SERIAL" \
-  start_node "01_realsense_pointcloud" \
-    bash "$ROOT/scripts/realsense_pointcloud.sh"
-else
-  say "SKIP RealSense start"
-  say "  camera must be started separately:"
-  say "  SERIAL=$CAMERA_SERIAL bash $ROOT/scripts/realsense_pointcloud.sh"
-fi
+say "Camera is managed by a separate terminal. This script will not start or reconfigure RealSense."
+say "  expected RGB:         $RGB_TOPIC"
+say "  expected Depth:       $DEPTH_TOPIC"
+say "  expected CameraInfo:  $CAMERA_INFO_TOPIC"
+say "  expected PointCloud:  $POINTS_TOPIC"
 
 if [ "$WAIT_CAMERA_TOPICS" = "true" ]; then
   wait_topic "$RGB_TOPIC" 30 || true
   wait_topic "$DEPTH_TOPIC" 30 || true
   wait_topic "$CAMERA_INFO_TOPIC" 10 || true
-fi
-
-# PointCloud는 대시보드 3D 뷰용입니다.
-# 외부 카메라 노드가 이미 떠 있으면 파라미터만 보정합니다.
-if ! ros2 topic list 2>/dev/null | grep -qx "$POINTS_TOPIC"; then
-  if ros2 node list 2>/dev/null | grep -qx "/camera/camera"; then
-    say "PointCloud topic not found. Trying to enable pointcloud on existing camera node."
-    ros2 param set /camera/camera pointcloud__neon_.stream_filter 2 || true
-    ros2 param set /camera/camera pointcloud__neon_.stream_index_filter 0 || true
-    ros2 param set /camera/camera pointcloud__neon_.allow_no_texture_points false || true
-    ros2 param set /camera/camera pointcloud__neon_.enable true || true
-    sleep 1
-  else
-    say "WARN camera node not found. PointCloud topic unavailable: $POINTS_TOPIC"
-  fi
 fi
 
 say "Current camera topics:"
@@ -303,28 +291,25 @@ start_node "05_person_follow" \
     -p output_topic:="$CMD_RAW_TOPIC"
 
 wait_topic "$CMD_RAW_TOPIC" 10 || true
+wait_topic "$PERSON_STATE_TOPIC" 10 || true
 
 # =========================
 # 5b. Person arrival -> VLM mission event bridge
 #     /zeri/person_follow/state -> /zeri/mission/event
 # =========================
 
-if [ ! -f "$ROOT/tools/person_arrival_event_bridge.py" ]; then
-  say "ERROR missing: $ROOT/tools/person_arrival_event_bridge.py"
-  exit 1
-fi
-
 start_node "05b_person_arrival_event_bridge" \
   python3 "$ROOT/tools/person_arrival_event_bridge.py" --ros-args \
     -p person_state_topic:="$PERSON_STATE_TOPIC" \
-    -p mission_event_topic:=/zeri/mission/event \
+    -p mission_event_topic:="$MISSION_EVENT_TOPIC" \
     -p stop_distance_m:="$STOP_DISTANCE_M" \
-    -p stable_sec:=1.0 \
-    -p cooldown_sec:=30.0 \
+    -p resume_distance_m:="$RESUME_DISTANCE_M" \
+    -p stable_sec:="$ARRIVAL_EVENT_STABLE_SEC" \
+    -p cooldown_sec:="$ARRIVAL_EVENT_COOLDOWN_SEC" \
+    -p selected_person_id:=person_follow_target \
     -p source:=person_follow_depth_lidar_drive
 
-wait_topic "/zeri/mission/event" 5 || true
-
+wait_topic "$MISSION_EVENT_TOPIC" 10 || true
 
 # =========================
 # 6. LiDAR + Depth safety guard
@@ -437,6 +422,7 @@ say ""
 say "Monitor:"
 say "  ros2 topic echo $SAFETY_STATE_TOPIC"
 say "  ros2 topic echo $PERSON_STATE_TOPIC"
+say "  ros2 topic echo $MISSION_EVENT_TOPIC"
 say "  ros2 topic echo $CMD_RAW_TOPIC"
 say "  ros2 topic echo $CMD_OUT_TOPIC"
 say "  ros2 topic hz /map"

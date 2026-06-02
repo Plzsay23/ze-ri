@@ -1,19 +1,28 @@
 #include <Encoder.h>
+#include <math.h>
+#include <string.h>
 
 // ============================================================
 // Ze-Ri Mobile Base Arduino Firmware
+//
 // Protocol:
 //   V vx vy wz\n     vx, vy, wz in [-1.0, 1.0]
 //   P pwm\n          set max PWM
-//   A accel decel\n  set ramp step
-//   X\n              stop
+//   X\n              smooth stop
+//   Z\n              immediate stop
 //
-// Legacy keys:
+// IMPORTANT:
+//   Acceleration command is NOT accepted.
+//   There is NO "A accel decel" serial command.
+//   Ramp values are fixed inside this firmware.
+//
+// Legacy lowercase keys for manual test:
 //   w/s : forward/backward
 //   a/d : turn left/right
 //   q/e : strafe left/right
 //   r/t/f/g : diagonal
-//   x : stop
+//   x : smooth stop
+//   z : immediate stop
 //   l/m : PWM +10 / -10
 //
 // Encoder output:
@@ -21,7 +30,10 @@
 // ============================================================
 
 
-// ===== Motor pins: existing confirmed wiring =====
+// ============================================================
+// Motor pins
+// ============================================================
+
 #define PWMA 4
 #define DIRA1 A5
 #define DIRA2 A4
@@ -39,23 +51,28 @@
 #define DIRD2 36
 
 
-// ===== Encoder pins =====
+// ============================================================
+// Encoder pins
+//
 // Actual motor mapping:
 //   A = RF
 //   B = LF, inverted
 //   C = RR
 //   D = LR, inverted
+// ============================================================
+
 Encoder encA(18, 31);   // RF
 Encoder encB(19, 38);   // LF, inverted
 Encoder encC(3, 49);    // RR
 Encoder encD(2, A1);    // LR, inverted
 
 
-// ===== Speed / timing =====
+// ============================================================
+// Speed / timing
+// ============================================================
+
 int Motor_PWM = 60;
 
-// 너무 낮으면 모터가 웅웅거리기만 하고 못 움직임.
-// 너무 높으면 시작이 튐.
 const int MIN_MOTION_PWM = 18;
 
 const unsigned long ENC_PERIOD_MS = 100;
@@ -67,14 +84,24 @@ unsigned long lastCmdMs = 0;
 unsigned long lastRampMs = 0;
 
 
-// ===== Smooth ramp =====
-// 20ms마다 wheel command가 이 정도씩 변함.
-// 더 부드럽게: ACCEL_STEP/DECEL_STEP 낮추기
-// 더 빠르게: ACCEL_STEP/DECEL_STEP 올리기
-float ACCEL_STEP = 0.025f;
-float DECEL_STEP = 0.040f;
+// ============================================================
+// Fixed internal ramp
+//
+// These values are NOT configurable through serial.
+// Arduino must NOT receive acceleration/deceleration values.
+// ============================================================
 
-// Wheel order: LF RF LR RR
+const float RAMP_UP_STEP = 0.025f;
+const float RAMP_DOWN_STEP = 0.040f;
+
+
+// ============================================================
+// Wheel command state
+//
+// Wheel order:
+//   LF RF LR RR
+// ============================================================
+
 float targetLF = 0.0f;
 float targetRF = 0.0f;
 float targetLR = 0.0f;
@@ -86,28 +113,34 @@ float currentLR = 0.0f;
 float currentRR = 0.0f;
 
 
-// ===== Serial line buffer =====
+// ============================================================
+// Serial line buffer
+// ============================================================
+
 char lineBuf[96];
 uint8_t lineLen = 0;
 bool lineMode = false;
 
 
-// ===== Motor low-level macros =====
-#define MOTORA_FORWARD(pwm)    do{digitalWrite(DIRA1,HIGH); digitalWrite(DIRA2,LOW);  analogWrite(PWMA,pwm);}while(0)
-#define MOTORA_BACKOFF(pwm)    do{digitalWrite(DIRA1,LOW);  digitalWrite(DIRA2,HIGH); analogWrite(PWMA,pwm);}while(0)
-#define MOTORA_STOP()          do{digitalWrite(DIRA1,LOW);  digitalWrite(DIRA2,LOW);  analogWrite(PWMA,0);}while(0)
+// ============================================================
+// Motor low-level macros
+// ============================================================
 
-#define MOTORB_FORWARD(pwm)    do{digitalWrite(DIRB1,LOW);  digitalWrite(DIRB2,HIGH); analogWrite(PWMB,pwm);}while(0)
-#define MOTORB_BACKOFF(pwm)    do{digitalWrite(DIRB1,HIGH); digitalWrite(DIRB2,LOW);  analogWrite(PWMB,pwm);}while(0)
-#define MOTORB_STOP()          do{digitalWrite(DIRB1,LOW);  digitalWrite(DIRB2,LOW);  analogWrite(PWMB,0);}while(0)
+#define MOTORA_FORWARD(pwm)    do { digitalWrite(DIRA1, HIGH); digitalWrite(DIRA2, LOW);  analogWrite(PWMA, pwm); } while (0)
+#define MOTORA_BACKOFF(pwm)    do { digitalWrite(DIRA1, LOW);  digitalWrite(DIRA2, HIGH); analogWrite(PWMA, pwm); } while (0)
+#define MOTORA_STOP()          do { digitalWrite(DIRA1, LOW);  digitalWrite(DIRA2, LOW);  analogWrite(PWMA, 0);   } while (0)
 
-#define MOTORC_FORWARD(pwm)    do{digitalWrite(DIRC1,HIGH); digitalWrite(DIRC2,LOW);  analogWrite(PWMC,pwm);}while(0)
-#define MOTORC_BACKOFF(pwm)    do{digitalWrite(DIRC1,LOW);  digitalWrite(DIRC2,HIGH); analogWrite(PWMC,pwm);}while(0)
-#define MOTORC_STOP()          do{digitalWrite(DIRC1,LOW);  digitalWrite(DIRC2,LOW);  analogWrite(PWMC,0);}while(0)
+#define MOTORB_FORWARD(pwm)    do { digitalWrite(DIRB1, LOW);  digitalWrite(DIRB2, HIGH); analogWrite(PWMB, pwm); } while (0)
+#define MOTORB_BACKOFF(pwm)    do { digitalWrite(DIRB1, HIGH); digitalWrite(DIRB2, LOW);  analogWrite(PWMB, pwm); } while (0)
+#define MOTORB_STOP()          do { digitalWrite(DIRB1, LOW);  digitalWrite(DIRB2, LOW);  analogWrite(PWMB, 0);   } while (0)
 
-#define MOTORD_FORWARD(pwm)    do{digitalWrite(DIRD1,LOW);  digitalWrite(DIRD2,HIGH); analogWrite(PWMD,pwm);}while(0)
-#define MOTORD_BACKOFF(pwm)    do{digitalWrite(DIRD1,HIGH); digitalWrite(DIRD2,LOW);  analogWrite(PWMD,pwm);}while(0)
-#define MOTORD_STOP()          do{digitalWrite(DIRD1,LOW);  digitalWrite(DIRD2,LOW);  analogWrite(PWMD,0);}while(0)
+#define MOTORC_FORWARD(pwm)    do { digitalWrite(DIRC1, HIGH); digitalWrite(DIRC2, LOW);  analogWrite(PWMC, pwm); } while (0)
+#define MOTORC_BACKOFF(pwm)    do { digitalWrite(DIRC1, LOW);  digitalWrite(DIRC2, HIGH); analogWrite(PWMC, pwm); } while (0)
+#define MOTORC_STOP()          do { digitalWrite(DIRC1, LOW);  digitalWrite(DIRC2, LOW);  analogWrite(PWMC, 0);   } while (0)
+
+#define MOTORD_FORWARD(pwm)    do { digitalWrite(DIRD1, LOW);  digitalWrite(DIRD2, HIGH); analogWrite(PWMD, pwm); } while (0)
+#define MOTORD_BACKOFF(pwm)    do { digitalWrite(DIRD1, HIGH); digitalWrite(DIRD2, LOW);  analogWrite(PWMD, pwm); } while (0)
+#define MOTORD_STOP()          do { digitalWrite(DIRD1, LOW);  digitalWrite(DIRD2, LOW);  analogWrite(PWMD, 0);   } while (0)
 
 
 // ============================================================
@@ -149,7 +182,7 @@ int scaledPwm(float v) {
 // Motor signed output
 // ============================================================
 
-void motorA_signed(float v) { // RF
+void motorA_signed(float v) {
   int pwm = scaledPwm(v);
 
   if (pwm == 0) {
@@ -161,7 +194,7 @@ void motorA_signed(float v) { // RF
   }
 }
 
-void motorB_signed(float v) { // LF
+void motorB_signed(float v) {
   int pwm = scaledPwm(v);
 
   if (pwm == 0) {
@@ -173,7 +206,7 @@ void motorB_signed(float v) { // LF
   }
 }
 
-void motorC_signed(float v) { // RR
+void motorC_signed(float v) {
   int pwm = scaledPwm(v);
 
   if (pwm == 0) {
@@ -185,7 +218,7 @@ void motorC_signed(float v) { // RR
   }
 }
 
-void motorD_signed(float v) { // LR
+void motorD_signed(float v) {
   int pwm = scaledPwm(v);
 
   if (pwm == 0) {
@@ -205,7 +238,7 @@ void motorD_signed(float v) { // LR
 float slewWheel(float current, float target) {
   target = clampf(target, -1.0f, 1.0f);
 
-  // 방향이 바로 반대로 바뀌면 급반전하지 말고 먼저 0으로 감속
+  // Avoid direct reverse. Pass through zero first.
   if (oppositeSign(current, target, 0.02f)) {
     target = 0.0f;
   }
@@ -218,11 +251,10 @@ float slewWheel(float current, float target) {
 
   float step;
 
-  // 목표 절댓값이 작아지는 중이면 감속 step 사용
   if (fabs(target) < fabs(current)) {
-    step = DECEL_STEP;
+    step = RAMP_DOWN_STEP;
   } else {
-    step = ACCEL_STEP;
+    step = RAMP_UP_STEP;
   }
 
   if (fabs(diff) <= step) {
@@ -296,6 +328,7 @@ void smoothStopMotors() {
 
 // ============================================================
 // Mecanum velocity command
+//
 // vx: forward +
 // vy: left +
 // wz: CCW / left turn +
@@ -306,7 +339,8 @@ void driveVelocity(float vx, float vy, float wz) {
   vy = clampf(vy, -1.0f, 1.0f);
   wz = clampf(wz, -1.0f, 1.0f);
 
-  // Wheel order: LF RF LR RR
+  // Wheel order:
+  //   LF RF LR RR
   float lf = vx + vy + wz;
   float rf = vx - vy - wz;
   float lr = vx - vy + wz;
@@ -331,81 +365,88 @@ void driveVelocity(float vx, float vy, float wz) {
 
 
 // ============================================================
-// Legacy key command
-// 이제 키 입력도 직접 모터를 때리지 않고 velocity target만 설정함.
-// 그래서 한 번 누르면 CMD_TIMEOUT_MS 동안 유지되고 ramp가 걸림.
+// Legacy lowercase key command
+//
+// Uppercase A is intentionally NOT used as turn command.
+// This prevents accidental old "A accel decel" input from moving robot.
 // ============================================================
 
+bool isLegacyKey(char cmd) {
+  return (
+    cmd == 'w' ||
+    cmd == 's' ||
+    cmd == 'a' ||
+    cmd == 'd' ||
+    cmd == 'q' ||
+    cmd == 'e' ||
+    cmd == 'r' ||
+    cmd == 't' ||
+    cmd == 'f' ||
+    cmd == 'g' ||
+    cmd == 'x' ||
+    cmd == 'z' ||
+    cmd == 'l' ||
+    cmd == 'm'
+  );
+}
+
 void handleKeyCommand(char cmd) {
-  if (cmd == '\n' || cmd == '\r') {
+  if (cmd == '\n' || cmd == '\r' || cmd == ' ' || cmd == '\t') {
     return;
   }
 
   switch (cmd) {
     case 'w':
-    case 'W':
       driveVelocity(1.0f, 0.0f, 0.0f);
       break;
 
     case 's':
-    case 'S':
       driveVelocity(-1.0f, 0.0f, 0.0f);
       break;
 
     case 'a':
-    case 'A':
       driveVelocity(0.0f, 0.0f, 1.0f);
       break;
 
     case 'd':
-    case 'D':
       driveVelocity(0.0f, 0.0f, -1.0f);
       break;
 
     case 'q':
-    case 'Q':
       driveVelocity(0.0f, 1.0f, 0.0f);
       break;
 
     case 'e':
-    case 'E':
       driveVelocity(0.0f, -1.0f, 0.0f);
       break;
 
     case 'r':
-    case 'R':
       driveVelocity(0.7f, 0.7f, 0.0f);
       break;
 
     case 't':
-    case 'T':
       driveVelocity(0.7f, -0.7f, 0.0f);
       break;
 
     case 'f':
-    case 'F':
       driveVelocity(-0.7f, 0.7f, 0.0f);
       break;
 
     case 'g':
-    case 'G':
       driveVelocity(-0.7f, -0.7f, 0.0f);
       break;
 
     case 'x':
-    case 'X':
       smoothStopMotors();
       lastCmdMs = millis();
       break;
 
     case 'z':
-    case 'Z':
       immediateStopMotors();
       lastCmdMs = millis();
       break;
 
     case 'l':
-    case 'L':
       Motor_PWM += 10;
       if (Motor_PWM > 255) Motor_PWM = 255;
       Serial.print("PWM ");
@@ -413,11 +454,13 @@ void handleKeyCommand(char cmd) {
       break;
 
     case 'm':
-    case 'M':
       Motor_PWM -= 10;
       if (Motor_PWM < 0) Motor_PWM = 0;
       Serial.print("PWM ");
       Serial.println(Motor_PWM);
+      break;
+
+    default:
       break;
   }
 }
@@ -425,6 +468,7 @@ void handleKeyCommand(char cmd) {
 
 // ============================================================
 // Encoder publish
+//
 // Output order must match base node:
 //   ENC LF RF LR RR
 // ============================================================
@@ -498,44 +542,30 @@ void handleLine(char *line) {
     return;
   }
 
-  // A accel decel
-  if (cmd[0] == 'A' || cmd[0] == 'a') {
-    char *sa = strtok(NULL, " ,\t");
-    char *sd = strtok(NULL, " ,\t");
-
-    if (sa != NULL) {
-      ACCEL_STEP = atof(sa);
-      ACCEL_STEP = clampf(ACCEL_STEP, 0.001f, 0.200f);
-    }
-
-    if (sd != NULL) {
-      DECEL_STEP = atof(sd);
-      DECEL_STEP = clampf(DECEL_STEP, 0.001f, 0.300f);
-    }
-
-    Serial.print("RAMP ");
-    Serial.print(ACCEL_STEP, 4);
-    Serial.print(" ");
-    Serial.println(DECEL_STEP, 4);
-    return;
-  }
-
-  // X or Z as line command
+  // X smooth stop
   if (cmd[0] == 'X' || cmd[0] == 'x') {
     smoothStopMotors();
     lastCmdMs = millis();
     return;
   }
 
+  // Z immediate stop
   if (cmd[0] == 'Z' || cmd[0] == 'z') {
     immediateStopMotors();
     lastCmdMs = millis();
     return;
   }
 
-  // Single-key fallback
-  if (cmd[1] == '\0') {
+  // No acceleration command is accepted.
+  // Old "A accel decel" lines are intentionally ignored.
+  if (cmd[0] == 'A') {
+    return;
+  }
+
+  // Single lowercase key fallback
+  if (cmd[1] == '\0' && isLegacyKey(cmd[0])) {
     handleKeyCommand(cmd[0]);
+    return;
   }
 }
 
@@ -560,7 +590,11 @@ void readSerialCommands() {
       continue;
     }
 
-    // Line-based commands
+    // Line-based commands.
+    //
+    // V/P are valid line commands.
+    // A is consumed as a line only to safely ignore old acceleration input.
+    // It does NOT configure acceleration.
     if (c == 'V' || c == 'v' ||
         c == 'P' || c == 'p' ||
         c == 'A') {
@@ -570,8 +604,26 @@ void readSerialCommands() {
       continue;
     }
 
-    // Single-char key commands
-    handleKeyCommand(c);
+    // Direct immediate commands
+    if (c == 'X') {
+      smoothStopMotors();
+      lastCmdMs = millis();
+      continue;
+    }
+
+    if (c == 'Z') {
+      immediateStopMotors();
+      lastCmdMs = millis();
+      continue;
+    }
+
+    // Single lowercase key commands
+    if (isLegacyKey(c)) {
+      handleKeyCommand(c);
+      continue;
+    }
+
+    // Ignore everything else
   }
 }
 
@@ -605,11 +657,13 @@ void setup() {
   lastEncMs = millis();
   lastRampMs = millis();
 
-  Serial.println("READY ZE_RI_BASE_VELOCITY_SMOOTH");
+  Serial.println("READY ZE_RI_BASE_VELOCITY_FIXED_RAMP");
   Serial.println("CMD: V vx vy wz  where vx,vy,wz in [-1,1]");
   Serial.println("CMD: P pwm");
-  Serial.println("CMD: A accel decel");
-  Serial.println("KEYS: w/s/a/d/q/e/r/t/f/g/x/z/l/m");
+  Serial.println("CMD: X smooth stop");
+  Serial.println("CMD: Z immediate stop");
+  Serial.println("NO CMD: A accel decel");
+  Serial.println("KEYS lowercase only: w/s/a/d/q/e/r/t/f/g/x/z/l/m");
   Serial.println("FORMAT: ENC LF RF LR RR");
 }
 
@@ -619,7 +673,7 @@ void loop() {
   readSerialCommands();
   updateMotorRamp();
 
-  // 명령이 끊기면 안전상 즉시 정지
+  // If command stream stops, stop safely.
   if (now - lastCmdMs > CMD_TIMEOUT_MS) {
     immediateStopMotors();
     lastCmdMs = now;
