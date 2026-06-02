@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 
 try:
     from .zeri_vlm_constants import (
+        MISSION_VERIFY_HANDOFF,
         LED_BLUE,
         LED_GREEN,
         LED_OFF,
@@ -26,6 +27,7 @@ try:
     from .zeri_vlm_types import VLMDecision
 except ImportError:
     from zeri_vlm_constants import (
+        MISSION_VERIFY_HANDOFF,
         LED_BLUE,
         LED_GREEN,
         LED_OFF,

@@ -7,18 +7,18 @@ from std_msgs.msg import Bool, Int32, String
 
 try:
     from .zeri_vlm_constants import (
-        LED_NAME_MAP, LED_OFF, MISSION_MARK_AND_REPORT, MISSION_RUN_VLA,
-        MISSION_TRIAGE_DIALOGUE, SUPPORTED_VLA_TASKS, VALID_MISSION_STATES
+        LED_NAME_MAP, LED_OFF, MISSION_MARK_AND_REPORT, MISSION_RETURN_ARM_HOME, MISSION_RUN_VLA,
+        MISSION_TRIAGE_DIALOGUE, SUPPORTED_VLA_TASKS, VALID_MISSION_STATES, VALID_NAV_INTENTS
     )
     from .zeri_vlm_decision import clamp_led_cmd
-    from .zeri_vlm_types import VLMDecision
+    from .zeri_vlm_types import VLMDecision, VLMRequest, VLMRequest
 except ImportError:
     from zeri_vlm_constants import (
-        LED_NAME_MAP, LED_OFF, MISSION_MARK_AND_REPORT, MISSION_RUN_VLA,
-        MISSION_TRIAGE_DIALOGUE, SUPPORTED_VLA_TASKS, VALID_MISSION_STATES
+        LED_NAME_MAP, LED_OFF, MISSION_MARK_AND_REPORT, MISSION_RETURN_ARM_HOME, MISSION_RUN_VLA,
+        MISSION_TRIAGE_DIALOGUE, SUPPORTED_VLA_TASKS, VALID_MISSION_STATES, VALID_NAV_INTENTS
     )
     from zeri_vlm_decision import clamp_led_cmd
-    from zeri_vlm_types import VLMDecision
+    from zeri_vlm_types import VLMDecision, VLMRequest, VLMRequest
 
 
 class ZeriVLMPublishMixin:

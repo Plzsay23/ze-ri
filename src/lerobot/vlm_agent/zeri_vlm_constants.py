@@ -177,6 +177,9 @@ LED command rule:
 - handoff_status="received"이면 mission_state는 RETURN_ARM_HOME 또는 RESUME_SEARCH로 둔다.
 - 무반응자, 중증 호흡곤란, 심한 출혈, 이동 불가자는 map_mark_required=true, map_mark_type="critical_victim", report_to_base=true로 둔다.
 - nav_intent는 고수준 의도만 출력한다. 속도값이나 cmd_vel은 절대 출력하지 않는다.
+- robot_speech는 고정 문구를 반복하지 말고, 현재 장면·사용자 발화·응급도에 맞춰 자연스럽고 짧게 생성한다.
+- robot_speech는 실제 요구조자에게 말하는 문장이다. 기계적인 설명보다 현장 대응 음성처럼 말한다.
+- 단, 응급처치 범위를 넘는 의학적 단정이나 위험한 처치 지시는 하지 않는다.
 - 반드시 JSON으로만 답한다.
 - JSON 바깥 문장은 절대 쓰지 않는다.
 """

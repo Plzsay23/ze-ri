@@ -38,10 +38,10 @@ HOST="${HOST:-127.0.0.1}"
 LEFT_SERVER_PORT="${LEFT_SERVER_PORT:-8081}"
 RIGHT_SERVER_PORT="${RIGHT_SERVER_PORT:-8082}"
 
-LEFT_MODEL="${LEFT_MODEL:-plzsay/pen_and_cup}"
-RIGHT_MODEL="${RIGHT_MODEL:-plzsay/pen_and_cup}"
-LEFT_POLICY_ID="${LEFT_POLICY_ID:-pen_and_cup}"
-RIGHT_POLICY_ID="${RIGHT_POLICY_ID:-pen_and_cup}"
+LEFT_MODEL="${LEFT_MODEL:-plzsay/pick_mask_act}"
+RIGHT_MODEL="${RIGHT_MODEL:-plzsay/pick_wt_act}"
+LEFT_POLICY_ID="${LEFT_POLICY_ID:-pick_mask_act}"
+RIGHT_POLICY_ID="${RIGHT_POLICY_ID:-pick_wt_act}"
 
 LEFT_ARM_PORT="${LEFT_ARM_PORT:-/dev/follower_left}"
 RIGHT_ARM_PORT="${RIGHT_ARM_PORT:-/dev/follower_right}"
@@ -137,31 +137,45 @@ JSON
 cat > "$ROUTE_MANIFEST" <<JSON
 {
   "routes": {
-    "pen_and_cup_left": {
-      "arm": "left",
-      "policy_id": "$LEFT_POLICY_ID",
-      "task": "Pick up the pen and place it in the cup.",
-      "duration_sec": $RUN_DURATION_SEC,
-      "timeout_sec": $TIMEOUT_SEC
-    },
-    "pen_and_cup_right": {
-      "arm": "right",
-      "policy_id": "$RIGHT_POLICY_ID",
-      "task": "Pick up the pen and place it in the cup.",
-      "duration_sec": $RUN_DURATION_SEC,
-      "timeout_sec": $TIMEOUT_SEC
-    },
     "oxygen_mask_delivery": {
       "arm": "left",
       "policy_id": "$LEFT_POLICY_ID",
-      "task": "Pick up the pen and place it in the cup.",
+      "task": "Pick up the oxygen mask.",
+      "duration_sec": $RUN_DURATION_SEC,
+      "timeout_sec": $TIMEOUT_SEC
+    },
+    "mask_delivery": {
+      "arm": "left",
+      "policy_id": "$LEFT_POLICY_ID",
+      "task": "Pick up the oxygen mask.",
+      "duration_sec": $RUN_DURATION_SEC,
+      "timeout_sec": $TIMEOUT_SEC
+    },
+    "pick_mask_act": {
+      "arm": "left",
+      "policy_id": "$LEFT_POLICY_ID",
+      "task": "Pick up the oxygen mask.",
       "duration_sec": $RUN_DURATION_SEC,
       "timeout_sec": $TIMEOUT_SEC
     },
     "radio_delivery": {
       "arm": "right",
       "policy_id": "$RIGHT_POLICY_ID",
-      "task": "Pick up the pen and place it in the cup.",
+      "task": "Pick up the walkie talkie.",
+      "duration_sec": $RUN_DURATION_SEC,
+      "timeout_sec": $TIMEOUT_SEC
+    },
+    "wt_delivery": {
+      "arm": "right",
+      "policy_id": "$RIGHT_POLICY_ID",
+      "task": "Pick up the walkie talkie.",
+      "duration_sec": $RUN_DURATION_SEC,
+      "timeout_sec": $TIMEOUT_SEC
+    },
+    "pick_wt_act": {
+      "arm": "right",
+      "policy_id": "$RIGHT_POLICY_ID",
+      "task": "Pick up the walkie talkie.",
       "duration_sec": $RUN_DURATION_SEC,
       "timeout_sec": $TIMEOUT_SEC
     }
@@ -233,7 +247,7 @@ start_bg left_vla_client \
     --robot.type=so101_follower \
     --robot.port="$LEFT_ARM_PORT" \
     --robot.id="$LEFT_ROBOT_ID" \
-    --robot.cameras="{top: {type: opencv, index_or_path: $LEFT_CAM, width: $CAM_WIDTH, height: $CAM_HEIGHT, fps: $WRIST_FPS}}" \
+    --robot.cameras="{cam_left: {type: opencv, index_or_path: $LEFT_CAM, width: $CAM_WIDTH, height: $CAM_HEIGHT, fps: $WRIST_FPS}}" \
     --task=idle \
     --server_address="$HOST:$LEFT_SERVER_PORT" \
     --policy_type=act \
@@ -262,7 +276,7 @@ start_bg right_vla_client \
     --robot.type=so101_follower \
     --robot.port="$RIGHT_ARM_PORT" \
     --robot.id="$RIGHT_ROBOT_ID" \
-    --robot.cameras="{top: {type: opencv, index_or_path: $RIGHT_CAM, width: $CAM_WIDTH, height: $CAM_HEIGHT, fps: $WRIST_FPS}}" \
+    --robot.cameras="{cam_wright: {type: opencv, index_or_path: $RIGHT_CAM, width: $CAM_WIDTH, height: $CAM_HEIGHT, fps: $WRIST_FPS}}" \
     --task=idle \
     --server_address="$HOST:$RIGHT_SERVER_PORT" \
     --policy_type=act \

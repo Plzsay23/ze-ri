@@ -1,6 +1,8 @@
 # zeri_vlm_runner.py
 import json
 
+from typing import Any, Dict
+
 import torch
 from PIL import Image as PILImage
 from qwen_vl_utils import process_vision_info
@@ -95,7 +97,9 @@ class QwenVLMRunner:
             generated_ids = self.model.generate(
                 **inputs,
                 max_new_tokens=self.max_new_tokens,
-                do_sample=False,
+                do_sample=True,
+                temperature=0.3,
+                top_p=0.9,
             )
 
         generated_ids_trimmed = generated_ids[:, inputs["input_ids"].shape[-1]:]

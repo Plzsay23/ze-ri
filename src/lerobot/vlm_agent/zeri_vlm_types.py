@@ -8,6 +8,7 @@ except ImportError:
     from zeri_vlm_constants import MISSION_TRIAGE_DIALOGUE
 
 
+@dataclass
 class VLMDecision:
     mission_state: str
     selected_person_id: str
@@ -31,6 +32,7 @@ class VLMDecision:
     raw_text: str
 
 
+@dataclass
 class VLMRequest:
     stt_text: str
     request_kind: str = "stt_triage"

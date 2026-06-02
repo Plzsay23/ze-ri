@@ -1,10 +1,10 @@
 {
-  "default_policy_id": "pen_and_cup",
+  "default_policy_id": "pick_wt_act",
   "policies": [
     {
-      "id": "pen_and_cup",
+      "id": "pick_wt_act",
       "policy_type": "act",
-      "pretrained_name_or_path": "plzsay/pen_and_cup",
+      "pretrained_name_or_path": "plzsay/pick_wt_act",
       "description": "Right-arm ACT policy. Camera key: top."
     }
   ]

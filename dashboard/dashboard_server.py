@@ -34,19 +34,24 @@ INDEX_HTML = r"""
 
   <style>
     :root {
-      --bg: #f3f6fb;
-      --card: #0f63d8;
-      --card2: #0b56c4;
-      --border: #062b63;
-      --text: #ffffff;
-      --muted: #dbeafe;
-      --dark-panel: #071f49;
-      --dark: #0f172a;
+      --bg0: #020617;
+      --bg1: #07111f;
+      --panel: rgba(15, 23, 42, 0.92);
+      --panel2: rgba(15, 35, 68, 0.82);
+      --panel3: rgba(8, 16, 32, 0.82);
+      --line: rgba(96, 165, 250, 0.34);
+      --line2: rgba(148, 163, 184, 0.18);
+      --text: #e5f0ff;
+      --muted: #93a4bd;
+      --soft: #bfdbfe;
+      --blue: #38bdf8;
+      --green: #22c55e;
+      --yellow: #f59e0b;
+      --red: #ef4444;
+      --shadow: 0 18px 40px rgba(0, 0, 0, 0.34);
     }
 
-    * {
-      box-sizing: border-box;
-    }
+    * { box-sizing: border-box; }
 
     html, body {
       width: 100%;
@@ -56,70 +61,230 @@ INDEX_HTML = r"""
     }
 
     body {
-      background: var(--bg);
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      color: var(--dark);
+      background:
+        radial-gradient(circle at 18% 10%, rgba(56, 189, 248, 0.18), transparent 28%),
+        radial-gradient(circle at 82% 18%, rgba(37, 99, 235, 0.15), transparent 30%),
+        linear-gradient(135deg, #020617 0%, #07111f 50%, #020617 100%);
+      font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--text);
       overflow: hidden;
     }
 
-    header {
-      height: 36px;
+    .topbar {
+      height: 58px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 10px;
-      background: #0f172a;
-      color: white;
-      border-bottom: 3px solid #2563eb;
+      padding: 0 18px;
+      background: rgba(2, 6, 23, 0.88);
+      border-bottom: 1px solid rgba(96, 165, 250, 0.28);
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.25);
+      backdrop-filter: blur(10px);
     }
 
-    header .title {
-      font-size: 16px;
+    .brand {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      line-height: 1.05;
+    }
+
+    .eyebrow {
+      color: var(--blue);
+      font-size: 10px;
       font-weight: 900;
-      letter-spacing: 0.2px;
+      letter-spacing: 1.8px;
+      text-transform: uppercase;
     }
 
-    header .status {
-      font-size: 12px;
-      font-weight: 700;
-      color: #bfdbfe;
+    .title {
+      margin-top: 5px;
+      font-size: 20px;
+      font-weight: 950;
+      letter-spacing: 0.2px;
+      color: #f8fbff;
+      white-space: nowrap;
+    }
+
+    .top-status {
       display: flex;
       align-items: center;
-      gap: 10px;
+      justify-content: flex-end;
+      gap: 8px;
+      min-width: 0;
+      flex-wrap: nowrap;
     }
 
-    .dot {
+    .status-chip {
+      height: 28px;
+      padding: 0 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      background: rgba(15, 23, 42, 0.78);
+      color: #cbd5e1;
+      font-size: 11px;
+      font-weight: 900;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+    }
+
+    .status-chip.ok {
+      color: #d1fae5;
+      border-color: rgba(34, 197, 94, 0.46);
+      background: rgba(6, 78, 59, 0.42);
+    }
+
+    .status-chip.warn {
+      color: #fde68a;
+      border-color: rgba(245, 158, 11, 0.48);
+      background: rgba(120, 53, 15, 0.42);
+    }
+
+    .status-chip.bad {
+      color: #fecaca;
+      border-color: rgba(239, 68, 68, 0.45);
+      background: rgba(127, 29, 29, 0.42);
+    }
+
+    .dot, .chip-dot {
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      background: #ef4444;
+      background: var(--red);
       display: inline-block;
+      box-shadow: 0 0 10px rgba(239, 68, 68, 0.7);
     }
 
-    .dot.ok {
-      background: #22c55e;
+    .dot.ok, .status-chip.ok .chip-dot {
+      background: var(--green);
+      box-shadow: 0 0 12px rgba(34, 197, 94, 0.82);
+    }
+
+    .status-chip.warn .chip-dot {
+      background: var(--yellow);
+      box-shadow: 0 0 12px rgba(245, 158, 11, 0.7);
+    }
+
+    .status-chip.bad .chip-dot {
+      background: var(--red);
+      box-shadow: 0 0 12px rgba(239, 68, 68, 0.75);
+    }
+
+    .clock {
+      color: #94a3b8;
+      font-size: 11px;
+      font-weight: 800;
+      min-width: 132px;
+      text-align: right;
+    }
+
+    .mission-bar {
+      height: 50px;
+      margin: 10px 10px 0;
+      padding: 0 14px;
+      border: 1px solid rgba(96, 165, 250, 0.28);
+      border-radius: 14px;
+      background: linear-gradient(90deg, rgba(15, 23, 42, 0.88), rgba(15, 35, 68, 0.72));
+      box-shadow: var(--shadow);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    .mission-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .mission-label {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 950;
+      letter-spacing: 1.3px;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .mission-state {
+      padding: 5px 12px;
+      border-radius: 999px;
+      color: #e0f2fe;
+      background: rgba(14, 165, 233, 0.22);
+      border: 1px solid rgba(56, 189, 248, 0.46);
+      font-size: 14px;
+      font-weight: 950;
+      letter-spacing: 0.35px;
+      white-space: nowrap;
+    }
+
+    .mission-desc {
+      color: #cbd5e1;
+      font-size: 12px;
+      font-weight: 800;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .mission-metrics {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: nowrap;
+    }
+
+    .mini-metric {
+      min-width: 76px;
+      padding: 5px 9px;
+      border-radius: 10px;
+      background: rgba(2, 6, 23, 0.35);
+      border: 1px solid rgba(148, 163, 184, 0.15);
+    }
+
+    .mini-metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 9px;
+      font-weight: 900;
+      letter-spacing: 0.8px;
+    }
+
+    .mini-metric strong {
+      display: block;
+      color: #f8fafc;
+      font-size: 13px;
+      font-weight: 950;
+      margin-top: 1px;
     }
 
     .grid {
       width: 100vw;
-      height: calc(100vh - 36px);
+      height: calc(100vh - 118px);
       display: grid;
-      grid-template-columns: repeat(12, minmax(0, 1fr));
-      grid-template-rows: minmax(0, 45fr) minmax(0, 27.5fr) minmax(0, 27.5fr);
+      grid-template-columns: repeat(14, minmax(0, 1fr));
+      grid-template-rows: minmax(0, 58fr) minmax(0, 42fr);
       grid-template-areas:
-        "rgb  rgb  rgb  rgb  rgb  rgb  depth depth depth depth depth depth"
-        "text text text map  map  map  map   map   base  base  base  base"
-        "text text text map  map  map  map   map   arm   arm   arm   arm";
+        "rgb rgb rgb rgb rgb rgb rgb depth depth depth depth depth depth depth"
+        "map map map voice voice voice voice base base base arm arm arm arm";
       gap: 10px;
       padding: 10px;
       margin: 0;
     }
 
     .card {
-      background: linear-gradient(135deg, var(--card), var(--card2));
-      border: 3px solid var(--border);
-      border-radius: 8px;
-      box-shadow: 0 4px 10px rgba(15, 23, 42, 0.24);
+      position: relative;
+      background: linear-gradient(145deg, rgba(15, 23, 42, 0.95), rgba(15, 35, 68, 0.84));
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
       color: var(--text);
       overflow: hidden;
       display: flex;
@@ -128,31 +293,64 @@ INDEX_HTML = r"""
       min-height: 0;
     }
 
+    .card::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      border-radius: inherit;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 22%);
+      opacity: 0.7;
+      z-index: 0;
+    }
+
+    .card > * { position: relative; z-index: 1; }
+
     .rgb-card { grid-area: rgb; }
     .depth-card { grid-area: depth; }
-    .text-card { grid-area: text; }
+    .text-card { grid-area: voice; }
     .map-card { grid-area: map; }
     .base-card { grid-area: base; }
     .arm-card { grid-area: arm; }
 
     .card-title {
-      height: 32px;
-      flex: 0 0 32px;
-      padding: 6px 10px;
-      font-size: 15px;
-      font-weight: 900;
-      background: rgba(0, 0, 0, 0.17);
-      border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+      height: 38px;
+      flex: 0 0 38px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--line2);
       display: flex;
       align-items: center;
       justify-content: space-between;
       min-width: 0;
+      background: rgba(2, 6, 23, 0.26);
+    }
+
+    .card-title span {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 950;
+      letter-spacing: 0.6px;
+      text-transform: uppercase;
+      color: #f8fafc;
+      min-width: 0;
+      white-space: nowrap;
+    }
+
+    .card-title span::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 2px;
+      background: var(--blue);
+      box-shadow: 0 0 12px rgba(56, 189, 248, 0.9);
     }
 
     .card-title small {
       font-size: 10px;
       color: var(--muted);
-      font-weight: 800;
+      font-weight: 850;
       text-align: right;
       max-width: 55%;
       overflow: hidden;
@@ -167,7 +365,7 @@ INDEX_HTML = r"""
       display: flex;
       align-items: center;
       justify-content: center;
-      background: var(--dark-panel);
+      background: #020617;
       overflow: hidden;
     }
 
@@ -176,7 +374,11 @@ INDEX_HTML = r"""
       height: 100%;
       object-fit: contain;
       image-rendering: auto;
-      background: var(--dark-panel);
+      background: #020617;
+    }
+
+    .rgb-card .media-wrap img {
+      object-fit: cover;
     }
 
     .pointcloud-wrap {
@@ -192,169 +394,192 @@ INDEX_HTML = r"""
       width: 100%;
       height: 100%;
       display: block;
-      background: radial-gradient(circle at center, #0f172a 0%, #020617 68%);
+      background:
+        radial-gradient(circle at center, rgba(14, 165, 233, 0.11), transparent 34%),
+        radial-gradient(circle at 50% 100%, rgba(37, 99, 235, 0.16), transparent 40%),
+        #020617;
       cursor: grab;
     }
 
-    .pointcloud-wrap canvas.dragging {
-      cursor: grabbing;
-    }
+    .pointcloud-wrap canvas.dragging { cursor: grabbing; }
 
-    .viewer-hint {
+    .viewer-hint, .overlay-pill {
       position: absolute;
-      left: 10px;
-      bottom: 8px;
-      padding: 5px 7px;
-      border-radius: 6px;
-      background: rgba(2, 6, 23, 0.72);
+      padding: 6px 9px;
+      border-radius: 999px;
+      background: rgba(2, 6, 23, 0.68);
       color: #bfdbfe;
       font-size: 10px;
-      font-weight: 800;
+      font-weight: 900;
       pointer-events: none;
       white-space: nowrap;
+      border: 1px solid rgba(96, 165, 250, 0.25);
+      backdrop-filter: blur(8px);
     }
+
+    .viewer-hint { left: 10px; bottom: 8px; }
+    .overlay-pill { right: 10px; bottom: 8px; }
 
     .placeholder {
-      color: #bfdbfe;
-      font-size: 20px;
-      font-weight: 900;
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #93c5fd;
+      font-size: 18px;
+      font-weight: 950;
       text-align: center;
       padding: 14px;
+      background: linear-gradient(135deg, rgba(2, 6, 23, 0.8), rgba(15, 23, 42, 0.55));
     }
 
-    .text-panel {
+    .text-panel, .status-big {
       flex: 1 1 auto;
       min-height: 0;
-      padding: 8px;
+      padding: 9px;
       overflow: auto;
-      background: rgba(5, 20, 48, 0.20);
+      background: rgba(2, 6, 23, 0.18);
     }
 
-    .metric {
-      margin-bottom: 7px;
-      padding: 7px 9px;
-      background: rgba(255, 255, 255, 0.13);
-      border: 1px solid rgba(255, 255, 255, 0.18);
-      border-radius: 8px;
+    .text-panel::-webkit-scrollbar,
+    .status-big::-webkit-scrollbar,
+    .status-line::-webkit-scrollbar { width: 8px; height: 8px; }
+
+    .text-panel::-webkit-scrollbar-thumb,
+    .status-big::-webkit-scrollbar-thumb,
+    .status-line::-webkit-scrollbar-thumb {
+      background: rgba(96, 165, 250, 0.28);
+      border-radius: 999px;
     }
 
-    .metric-label {
-      color: #dbeafe;
-      font-size: 11px;
-      font-weight: 900;
-      margin-bottom: 4px;
+    .metric, .status-line {
+      margin-bottom: 8px;
+      padding: 9px 10px;
+      background: rgba(15, 23, 42, 0.58);
+      border: 1px solid rgba(148, 163, 184, 0.14);
+      border-radius: 11px;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
     }
 
-    .metric-value {
-      color: white;
-      font-size: 15px;
-      font-weight: 800;
-      white-space: pre-wrap;
-      word-break: break-word;
+    .metric:last-child, .status-line:last-child { margin-bottom: 0; }
+
+    .metric.primary {
+      background: linear-gradient(135deg, rgba(14, 165, 233, 0.18), rgba(15, 23, 42, 0.58));
+      border-color: rgba(56, 189, 248, 0.28);
     }
 
-    .metric-value.small {
-      font-size: 11px;
-      line-height: 1.30;
-      font-weight: 700;
-    }
-
-    .status-big {
-      flex: 1 1 auto;
-      min-height: 0;
-      padding: 8px;
-      display: block;
-      background: rgba(5, 20, 48, 0.15);
-      overflow: auto;
-    }
-
-    .status-line {
-      padding: 8px;
-      border-radius: 8px;
-      background: rgba(255, 255, 255, 0.13);
-      border: 1px solid rgba(255, 255, 255, 0.18);
-      overflow: auto;
-      margin-bottom: 7px;
-    }
-
-    .status-line:last-child {
-      margin-bottom: 0;
-    }
-
-    .status-line.compact-line {
-      min-height: 0;
-    }
-
-    .status-line .label {
-      font-size: 11px;
-      font-weight: 900;
-      color: #dbeafe;
+    .metric-label, .status-line .label {
+      color: #93c5fd;
+      font-size: 10px;
+      font-weight: 950;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
       margin-bottom: 5px;
     }
 
-    .status-line .value {
-      font-size: 12px;
-      line-height: 1.23;
+    .metric-value, .status-line .value {
+      color: #f8fafc;
+      font-size: 13px;
+      line-height: 1.28;
       font-weight: 800;
-      color: white;
       white-space: pre-wrap;
       word-break: break-word;
       overflow-wrap: anywhere;
     }
 
-    @media (max-width: 1200px) {
-      body {
-        overflow-y: auto;
-      }
+    .metric-value.small, .status-line .value {
+      font-size: 11px;
+      line-height: 1.27;
+      font-weight: 760;
+    }
 
+    .status-big {
+      display: grid;
+      grid-template-columns: 1fr;
+      align-content: start;
+    }
+
+    @media (max-width: 1280px) {
+      body { overflow-y: auto; }
+      .topbar {
+        height: auto;
+        min-height: 58px;
+        align-items: flex-start;
+        gap: 8px;
+        flex-direction: column;
+        padding: 10px 12px;
+      }
+      .top-status { justify-content: flex-start; flex-wrap: wrap; }
+      .clock { text-align: left; min-width: 0; }
+      .mission-bar {
+        height: auto;
+        min-height: 58px;
+        flex-direction: column;
+        align-items: flex-start;
+        padding: 10px;
+      }
+      .mission-left { flex-wrap: wrap; }
+      .mission-metrics { flex-wrap: wrap; justify-content: flex-start; }
       .grid {
         height: auto;
-        min-height: calc(100vh - 36px);
+        min-height: calc(100vh - 118px);
         grid-template-columns: 1fr;
-        grid-template-rows:
-          320px
-          320px
-          360px
-          360px
-          260px
-          260px;
-        grid-template-areas:
-          "rgb"
-          "depth"
-          "text"
-          "map"
-          "base"
-          "arm";
+        grid-template-rows: 420px 420px 320px 360px 320px 340px;
+        grid-template-areas: "rgb" "depth" "map" "voice" "base" "arm";
       }
     }
   </style>
 </head>
 
 <body>
-  <header>
-    <div class="title">Ze-Ri ROS2 Autonomy / VLA Dashboard</div>
-    <div class="status">
-      <span><span id="ws-dot" class="dot"></span> <span id="ws-state">DISCONNECTED</span></span>
-      <span>|</span>
-      <span id="clock">-</span>
+  <header class="topbar">
+    <div class="brand">
+      <div class="eyebrow">ZERO-RISK / FIELD OPERATIONS</div>
+      <div class="title">Ze-Ri Mission Dashboard</div>
+    </div>
+
+    <div class="top-status">
+      <div id="chip-ws" class="status-chip bad"><span id="ws-dot" class="dot"></span><span id="ws-state">DISCONNECTED</span></div>
+      <div id="chip-rgb" class="status-chip bad"><span class="chip-dot"></span><span>RGB</span><b>WAIT</b></div>
+      <div id="chip-pc" class="status-chip bad"><span class="chip-dot"></span><span>3D</span><b>WAIT</b></div>
+      <div id="chip-map" class="status-chip bad"><span class="chip-dot"></span><span>SLAM</span><b>WAIT</b></div>
+      <div id="chip-base" class="status-chip bad"><span class="chip-dot"></span><span>BASE</span><b>WAIT</b></div>
+      <div id="chip-vla" class="status-chip bad"><span class="chip-dot"></span><span>VLA</span><b>WAIT</b></div>
+      <div id="clock" class="clock">-</div>
     </div>
   </header>
+
+  <section class="mission-bar">
+    <div class="mission-left">
+      <div class="mission-label">MISSION STATE</div>
+      <div id="mission-state" class="mission-state">BOOTING</div>
+      <div id="mission-desc" class="mission-desc">ROS 데이터 수신 대기중</div>
+    </div>
+    <div class="mission-metrics">
+      <div class="mini-metric"><span>RGB FRAMES</span><strong id="rgb-count">0</strong></div>
+      <div class="mini-metric"><span>3D POINTS</span><strong id="pc-count">0</strong></div>
+      <div class="mini-metric"><span>MAP FRAMES</span><strong id="map-count">0</strong></div>
+      <div class="mini-metric"><span>LAST UPDATE</span><strong id="last-update">-</strong></div>
+    </div>
+  </section>
 
   <main class="grid">
     <section class="card rgb-card">
       <div class="card-title">
-        <span>RGB 채널</span>
+        <span>RGB Live Feed</span>
         <small id="rgb-ts">대기중</small>
       </div>
       <div class="media-wrap">
         <img id="rgb-img" alt="RGB Stream" style="display:none" />
         <div id="rgb-placeholder" class="placeholder">RGB 데이터 대기중</div>
+        <div id="rgb-overlay" class="overlay-pill">camera/color/image_raw</div>
       </div>
     </section>
 
     <section class="card depth-card">
       <div class="card-title">
-        <span>3D Map / PointCloud</span>
+        <span>3D PointCloud View</span>
         <small id="depth-ts">대기중</small>
       </div>
       <div class="media-wrap">
@@ -362,57 +587,54 @@ INDEX_HTML = r"""
           <canvas id="pointcloud-canvas"></canvas>
           <div id="pointcloud-placeholder" class="placeholder">PointCloud 데이터 대기중</div>
           <div class="viewer-hint">좌클릭 회전 · 우클릭 이동 · 휠 줌</div>
-        </div>
-      </div>
-    </section>
-
-    <section class="card text-card">
-      <div class="card-title">
-        <span>STT / VLM 출력</span>
-        <small id="vlm-ts">대기중</small>
-      </div>
-      <div class="text-panel">
-        <div class="metric">
-          <div class="metric-label">STT 입력값</div>
-          <div id="stt-text" class="metric-value">대기중</div>
-        </div>
-
-        <div class="metric">
-          <div class="metric-label">TTS 출력</div>
-          <div id="robot-speech" class="metric-value">대기중</div>
-        </div>
-
-        <div class="metric">
-          <div class="metric-label">VLM 상태</div>
-          <div id="vlm-status" class="metric-value small">대기중</div>
-        </div>
-
-        <div class="metric">
-          <div class="metric-label">VLM 출력</div>
-          <div id="vlm-output" class="metric-value small">대기중</div>
-        </div>
-
-        <div class="metric">
-          <div class="metric-label">VLM 출력 근거</div>
-          <div id="vlm-reason" class="metric-value small">대기중</div>
+          <div id="pc-overlay" class="overlay-pill">0 points</div>
         </div>
       </div>
     </section>
 
     <section class="card map-card">
       <div class="card-title">
-        <span>2D Map</span>
+        <span>2D SLAM Map</span>
         <small id="map-ts">대기중</small>
       </div>
       <div class="media-wrap">
         <img id="map-img" alt="2D Map" style="display:none" />
-        <div id="map-placeholder" class="placeholder">Map 데이터 대기중</div>
+        <div id="map-placeholder" class="placeholder">/map 데이터 대기중</div>
+      </div>
+    </section>
+
+    <section class="card text-card">
+      <div class="card-title">
+        <span>Voice / VLM</span>
+        <small id="vlm-ts">대기중</small>
+      </div>
+      <div class="text-panel">
+        <div class="metric primary">
+          <div class="metric-label">STT 입력</div>
+          <div id="stt-text" class="metric-value">대기중</div>
+        </div>
+        <div class="metric primary">
+          <div class="metric-label">TTS 출력</div>
+          <div id="robot-speech" class="metric-value">대기중</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">VLM 상태</div>
+          <div id="vlm-status" class="metric-value small">대기중</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">VLM 판단값</div>
+          <div id="vlm-output" class="metric-value small">대기중</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">판단 근거</div>
+          <div id="vlm-reason" class="metric-value small">대기중</div>
+        </div>
       </div>
     </section>
 
     <section class="card base-card">
       <div class="card-title">
-        <span>자율주행 / 베이스 상태</span>
+        <span>Autonomy / Safety</span>
         <small id="base-ts">대기중</small>
       </div>
       <div class="status-big">
@@ -420,15 +642,15 @@ INDEX_HTML = r"""
           <div class="label">Person Follow</div>
           <div id="person-follow-state" class="value">데이터 대기중</div>
         </div>
-        <div class="status-line compact-line">
+        <div class="status-line">
           <div class="label">LiDAR + Depth Safety Guard</div>
           <div id="safety-guard-state" class="value">데이터 대기중</div>
         </div>
-        <div class="status-line compact-line">
+        <div class="status-line">
           <div class="label">cmd_vel_raw → cmd_vel</div>
           <div id="cmd-state" class="value">데이터 대기중</div>
         </div>
-        <div class="status-line compact-line">
+        <div class="status-line">
           <div class="label">Scan / Odom</div>
           <div id="nav-state" class="value">데이터 대기중</div>
         </div>
@@ -437,7 +659,7 @@ INDEX_HTML = r"""
 
     <section class="card arm-card">
       <div class="card-title">
-        <span>VLA / 로봇팔 상태</span>
+        <span>VLA / Robot Arms</span>
         <small id="arm-ts">대기중</small>
       </div>
       <div class="status-big">
@@ -445,15 +667,15 @@ INDEX_HTML = r"""
           <div class="label">VLA Router</div>
           <div id="vla-status" class="value">데이터 대기중</div>
         </div>
-        <div class="status-line compact-line">
+        <div class="status-line">
           <div class="label">Left Arm</div>
           <div id="vla-left-status" class="value">데이터 대기중</div>
         </div>
-        <div class="status-line compact-line">
+        <div class="status-line">
           <div class="label">Right Arm</div>
           <div id="vla-right-status" class="value">데이터 대기중</div>
         </div>
-        <div class="status-line compact-line">
+        <div class="status-line">
           <div class="label">Last Task Request / Legacy Arm Status</div>
           <div id="arm-status" class="value">데이터 대기중</div>
         </div>
@@ -493,6 +715,98 @@ INDEX_HTML = r"""
       if (typeof v === "object") return JSON.stringify(v, null, 2);
       return String(v);
     }
+
+
+    function isFresh(ts, maxAgeSec) {
+      if (!ts) return false;
+      return ((Date.now() / 1000.0) - ts) <= maxAgeSec;
+    }
+
+    function shortAge(ts) {
+      if (!ts) return "WAIT";
+      const age = Math.max(0, (Date.now() / 1000.0) - ts);
+      if (age < 1.0) return "LIVE";
+      if (age < 60.0) return `${age.toFixed(0)}s`;
+      return `${Math.floor(age / 60)}m`;
+    }
+
+    function setChip(id, state, detail) {
+      const el = $(id);
+      if (!el) return;
+      el.classList.remove("ok", "warn", "bad");
+      el.classList.add(state);
+      const b = el.querySelector("b");
+      if (b) b.textContent = detail;
+    }
+
+    function hasUsefulText(v) {
+      const t = safeText(v, "").trim();
+      return t && t !== "데이터 대기중" && t !== "대기중" && t !== "-";
+    }
+
+    function inferMissionState(data) {
+      const ts = data.timestamps || {};
+      const safety = safeText(data.safety_guard_state, "").toLowerCase();
+      const person = safeText(data.person_follow_state, "").toLowerCase();
+      const vla = safeText(data.vla_status, "").toLowerCase();
+      const vlm = safeText(data.inference_status, "").toLowerCase();
+
+      if (isFresh(ts.vla, 4) || /running|execute|active|busy|실행/.test(vla)) {
+        return ["VLA_RUNNING", "로봇팔 정책 실행 또는 라우터 상태 수신중"];
+      }
+      if (/block|stop|obstacle|danger|guard|emergency|충돌|장애물|정지/.test(safety)) {
+        return ["SAFETY_GUARD", "LiDAR/Depth 안전 가드가 주행 명령을 감시중"];
+      }
+      if (/running|infer|processing|생성|추론/.test(vlm) || isFresh(ts.vlm, 3)) {
+        return ["VLM_DIALOG", "STT/VLM/TTS 대화 루프가 갱신중"];
+      }
+      if (isFresh(ts.person, 3) || /track|follow|approach|person|사람|추종|접근/.test(person)) {
+        return ["PERSON_FOLLOW", "사람 추종 및 접근 주행 상태 수신중"];
+      }
+      if (isFresh(ts.cmd_out, 3) || isFresh(ts.odom, 3)) {
+        return ["BASE_ACTIVE", "베이스 주행 명령 또는 오도메트리 수신중"];
+      }
+      if (isFresh(ts.rgb, 3) && isFresh(ts.pointcloud, 3) && isFresh(ts.map, 8)) {
+        return ["AUTONOMY_READY", "RGB·3D·SLAM 데이터가 정상 수신중"];
+      }
+      if (isFresh(ts.rgb, 3) || isFresh(ts.pointcloud, 3)) {
+        return ["SENSOR_READY", "카메라/포인트클라우드 데이터 수신중"];
+      }
+      return ["BOOTING", "ROS 데이터 수신 대기중"];
+    }
+
+    function updateMissionAndChips(data) {
+      const ts = data.timestamps || {};
+      const counts = data.counts || {};
+
+      const rgbOk = isFresh(ts.rgb, 3);
+      const pcOk = isFresh(ts.pointcloud, 3);
+      const mapOk = isFresh(ts.map, 8);
+      const baseOk = isFresh(ts.safety, 3) || isFresh(ts.person, 3) || isFresh(ts.cmd_out, 3) || isFresh(ts.odom, 3);
+      const vlaOk = isFresh(ts.vla, 5) || isFresh(ts.vla_left, 5) || isFresh(ts.vla_right, 5);
+
+      setChip("chip-rgb", rgbOk ? "ok" : "bad", rgbOk ? shortAge(ts.rgb) : "WAIT");
+      setChip("chip-pc", pcOk ? "ok" : "bad", pcOk ? shortAge(ts.pointcloud) : "WAIT");
+      setChip("chip-map", mapOk ? "ok" : "warn", mapOk ? shortAge(ts.map) : "WAIT");
+      setChip("chip-base", baseOk ? "ok" : "warn", baseOk ? shortAge(Math.max(ts.safety || 0, ts.person || 0, ts.cmd_out || 0, ts.odom || 0)) : "WAIT");
+      setChip("chip-vla", vlaOk ? "ok" : "warn", vlaOk ? shortAge(Math.max(ts.vla || 0, ts.vla_left || 0, ts.vla_right || 0)) : "WAIT");
+
+      const [mission, desc] = inferMissionState(data);
+      $("mission-state").textContent = mission;
+      $("mission-desc").textContent = desc;
+
+      $("rgb-count").textContent = counts.rgb || 0;
+      $("map-count").textContent = counts.map || 0;
+
+      const pc = data.point_cloud || {};
+      const pcCount = pc.count || 0;
+      $("pc-count").textContent = pcCount.toLocaleString();
+      $("pc-overlay").textContent = `${pcCount.toLocaleString()} points`;
+
+      const lastTs = Math.max(ts.rgb || 0, ts.pointcloud || 0, ts.map || 0, ts.vlm || 0, ts.safety || 0, ts.vla || 0);
+      $("last-update").textContent = shortAge(lastTs);
+    }
+
 
     const pcViewer = {
       canvas: null,
@@ -579,10 +893,8 @@ INDEX_HTML = r"""
 
     function initPointCloudViewer() {
       const canvas = $("pointcloud-canvas");
-      const gl = canvas.getContext("webgl", {
-        antialias: true,
-        preserveDrawingBuffer: false,
-      });
+      if (!canvas) return;
+      const gl = canvas.getContext("webgl", { antialias: true, preserveDrawingBuffer: false });
 
       if (!gl) {
         $("pointcloud-placeholder").textContent = "이 브라우저는 WebGL을 지원하지 않습니다";
@@ -596,7 +908,7 @@ INDEX_HTML = r"""
         varying vec3 v_color;
         void main() {
           gl_Position = u_matrix * vec4(a_position, 1.0);
-          gl_PointSize = 2.2;
+          gl_PointSize = 2.0;
           v_color = a_color;
         }
       `;
@@ -615,7 +927,6 @@ INDEX_HTML = r"""
       gl.attachShader(program, makeShader(gl, gl.VERTEX_SHADER, vs));
       gl.attachShader(program, makeShader(gl, gl.FRAGMENT_SHADER, fs));
       gl.linkProgram(program);
-
       if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
         throw new Error(gl.getProgramInfoLog(program) || "program link failed");
       }
@@ -627,7 +938,6 @@ INDEX_HTML = r"""
       pcViewer.colorBuffer = gl.createBuffer();
 
       canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-
       canvas.addEventListener("mousedown", (e) => {
         pcViewer.dragging = true;
         pcViewer.dragButton = e.button;
@@ -635,20 +945,16 @@ INDEX_HTML = r"""
         pcViewer.lastY = e.clientY;
         canvas.classList.add("dragging");
       });
-
       window.addEventListener("mouseup", () => {
         pcViewer.dragging = false;
         canvas.classList.remove("dragging");
       });
-
       window.addEventListener("mousemove", (e) => {
         if (!pcViewer.dragging) return;
-
         const dx = e.clientX - pcViewer.lastX;
         const dy = e.clientY - pcViewer.lastY;
         pcViewer.lastX = e.clientX;
         pcViewer.lastY = e.clientY;
-
         if (pcViewer.dragButton === 2) {
           const panScale = pcViewer.distance * 0.0016;
           pcViewer.targetX -= dx * panScale;
@@ -659,7 +965,6 @@ INDEX_HTML = r"""
           pcViewer.pitch = Math.max(-1.45, Math.min(1.45, pcViewer.pitch));
         }
       });
-
       canvas.addEventListener("wheel", (e) => {
         e.preventDefault();
         const scale = Math.exp(e.deltaY * 0.001);
@@ -671,44 +976,31 @@ INDEX_HTML = r"""
 
     function updatePointCloudViewer(payload) {
       if (!payload || !payload.points || !payload.colors || !pcViewer.gl) return;
-
       const gl = pcViewer.gl;
       const points = new Float32Array(payload.points);
       const colors = new Float32Array(payload.colors);
-
       pcViewer.pointCount = Math.floor(points.length / 3);
-
       gl.bindBuffer(gl.ARRAY_BUFFER, pcViewer.posBuffer);
       gl.bufferData(gl.ARRAY_BUFFER, points, gl.DYNAMIC_DRAW);
-
       gl.bindBuffer(gl.ARRAY_BUFFER, pcViewer.colorBuffer);
       gl.bufferData(gl.ARRAY_BUFFER, colors, gl.DYNAMIC_DRAW);
-
       const ph = $("pointcloud-placeholder");
-      if (pcViewer.pointCount > 0) {
-        ph.style.display = "none";
-      } else {
-        ph.style.display = "block";
-      }
+      if (ph) ph.style.display = pcViewer.pointCount > 0 ? "none" : "block";
     }
 
     function renderPointCloud() {
       const gl = pcViewer.gl;
       const canvas = pcViewer.canvas;
-
       if (!gl || !canvas) {
         requestAnimationFrame(renderPointCloud);
         return;
       }
-
       const w = canvas.clientWidth || 1;
       const h = canvas.clientHeight || 1;
-
       if (canvas.width !== w || canvas.height !== h) {
         canvas.width = w;
         canvas.height = h;
       }
-
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.clearColor(0.008, 0.024, 0.070, 1.0);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -717,41 +1009,31 @@ INDEX_HTML = r"""
       if (pcViewer.pointCount > 0) {
         const aspect = canvas.width / Math.max(1, canvas.height);
         const proj = mat4Perspective(Math.PI / 4.0, aspect, 0.03, 30.0);
-
         const cp = Math.cos(pcViewer.pitch);
         const sp = Math.sin(pcViewer.pitch);
         const sy = Math.sin(pcViewer.yaw);
         const cy = Math.cos(pcViewer.yaw);
-
         const target = [pcViewer.targetX, pcViewer.targetY, pcViewer.targetZ];
         const eye = [
           target[0] + pcViewer.distance * sy * cp,
           target[1] + pcViewer.distance * sp,
           target[2] + pcViewer.distance * cy * cp,
         ];
-
         const view = mat4LookAt(eye, target, [0, 1, 0]);
         const matrix = mat4Multiply(proj, view);
-
         gl.useProgram(pcViewer.program);
-
         const aPos = gl.getAttribLocation(pcViewer.program, "a_position");
         const aColor = gl.getAttribLocation(pcViewer.program, "a_color");
         const uMatrix = gl.getUniformLocation(pcViewer.program, "u_matrix");
-
         gl.uniformMatrix4fv(uMatrix, false, matrix);
-
         gl.bindBuffer(gl.ARRAY_BUFFER, pcViewer.posBuffer);
         gl.enableVertexAttribArray(aPos);
         gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
-
         gl.bindBuffer(gl.ARRAY_BUFFER, pcViewer.colorBuffer);
         gl.enableVertexAttribArray(aColor);
         gl.vertexAttribPointer(aColor, 3, gl.FLOAT, false, 0, 0);
-
         gl.drawArrays(gl.POINTS, 0, pcViewer.pointCount);
       }
-
       requestAnimationFrame(renderPointCloud);
     }
 
@@ -819,6 +1101,8 @@ INDEX_HTML = r"""
         "TASK_REQUEST " + safeText(data.vla_task_request, "-"),
         "LEGACY " + safeText(data.arm_status, "-"),
       ].join("\n");
+
+      updateMissionAndChips(data);
     }
 
     function connect() {
@@ -828,6 +1112,8 @@ INDEX_HTML = r"""
       ws.onopen = () => {
         $("ws-dot").classList.add("ok");
         $("ws-state").textContent = "CONNECTED";
+        $("chip-ws").classList.remove("bad", "warn");
+        $("chip-ws").classList.add("ok");
       };
 
       ws.onmessage = (event) => {
@@ -838,6 +1124,8 @@ INDEX_HTML = r"""
       ws.onclose = () => {
         $("ws-dot").classList.remove("ok");
         $("ws-state").textContent = "DISCONNECTED";
+        $("chip-ws").classList.remove("ok", "warn");
+        $("chip-ws").classList.add("bad");
         setTimeout(connect, 1000);
       };
 
@@ -1099,7 +1387,7 @@ _POINT_FIELD_DTYPES = {
 
 def pointcloud2_to_payload(
     msg: PointCloud2,
-    max_points: int = 6000,
+    max_points: int = 30000,
     max_range_m: float = 5.0,
 ) -> Optional[Dict[str, Any]]:
     if msg.width <= 0 or msg.height <= 0 or msg.point_step <= 0:
@@ -1118,10 +1406,8 @@ def pointcloud2_to_payload(
         base = _POINT_FIELD_DTYPES.get(int(field.datatype))
         if base is None:
             continue
-
         base = base.newbyteorder(endian)
         count = max(1, int(field.count))
-
         names.append(field.name)
         formats.append(base if count == 1 else (base, count))
         offsets.append(int(field.offset))
@@ -1133,91 +1419,44 @@ def pointcloud2_to_payload(
             "offsets": offsets,
             "itemsize": int(msg.point_step),
         })
-
         total_points = int(msg.width) * int(msg.height)
         arr = np.frombuffer(bytes(msg.data), dtype=dtype, count=total_points)
-
         x = np.asarray(arr["x"], dtype=np.float32).reshape(-1)
         y = np.asarray(arr["y"], dtype=np.float32).reshape(-1)
         z = np.asarray(arr["z"], dtype=np.float32).reshape(-1)
-
         valid = np.isfinite(x) & np.isfinite(y) & np.isfinite(z)
         valid &= z > 0.02
-
         if max_range_m > 0:
             valid &= np.sqrt(x * x + y * y + z * z) <= float(max_range_m)
-
         indices = np.flatnonzero(valid)
-
         if indices.size == 0:
-            return {
-                "points": [],
-                "colors": [],
-                "count": 0,
-                "frame_id": msg.header.frame_id,
-                "source_points": total_points,
-            }
-
+            return {"points": [], "colors": [], "count": 0, "frame_id": msg.header.frame_id, "source_points": total_points}
         if indices.size > max_points:
             step = int(math.ceil(indices.size / float(max_points)))
             indices = indices[::step][:max_points]
-
-        # RealSense optical frame: x=right, y=down, z=forward.
-        # Viewer frame: x=right, y=up, z=forward-into-screen.
         pts = np.column_stack((x[indices], -y[indices], -z[indices])).astype(np.float32)
-
         colors = None
-
         if "rgb" in arr.dtype.names:
             rgb_raw = np.asarray(arr["rgb"][indices]).reshape(-1)
             if rgb_raw.dtype == np.float32:
                 rgb_uint = rgb_raw.copy().view(np.uint32)
             else:
                 rgb_uint = rgb_raw.astype(np.uint32, copy=False)
-
-            colors = np.column_stack((
-                ((rgb_uint >> 16) & 255),
-                ((rgb_uint >> 8) & 255),
-                (rgb_uint & 255),
-            )).astype(np.float32) / 255.0
-
+            colors = np.column_stack((((rgb_uint >> 16) & 255), ((rgb_uint >> 8) & 255), (rgb_uint & 255))).astype(np.float32) / 255.0
         elif "rgba" in arr.dtype.names:
             rgba_raw = np.asarray(arr["rgba"][indices]).reshape(-1)
             if rgba_raw.dtype == np.float32:
                 rgba_uint = rgba_raw.copy().view(np.uint32)
             else:
                 rgba_uint = rgba_raw.astype(np.uint32, copy=False)
-
-            colors = np.column_stack((
-                ((rgba_uint >> 16) & 255),
-                ((rgba_uint >> 8) & 255),
-                (rgba_uint & 255),
-            )).astype(np.float32) / 255.0
-
+            colors = np.column_stack((((rgba_uint >> 16) & 255), ((rgba_uint >> 8) & 255), (rgba_uint & 255))).astype(np.float32) / 255.0
         elif {"r", "g", "b"}.issubset(arr.dtype.names):
-            colors = np.column_stack((
-                np.asarray(arr["r"][indices]).reshape(-1),
-                np.asarray(arr["g"][indices]).reshape(-1),
-                np.asarray(arr["b"][indices]).reshape(-1),
-            )).astype(np.float32) / 255.0
-
+            colors = np.column_stack((np.asarray(arr["r"][indices]).reshape(-1), np.asarray(arr["g"][indices]).reshape(-1), np.asarray(arr["b"][indices]).reshape(-1))).astype(np.float32) / 255.0
         if colors is None:
             depth = np.clip(z[indices], 0.0, max(0.1, float(max_range_m)))
             norm = depth / max(0.1, float(max_range_m))
-            colors = np.column_stack((
-                0.25 + 0.75 * (1.0 - norm),
-                0.55 + 0.35 * norm,
-                1.0 * norm,
-            )).astype(np.float32)
-
-        return {
-            "points": np.round(pts, 4).reshape(-1).tolist(),
-            "colors": np.round(colors, 4).reshape(-1).tolist(),
-            "count": int(pts.shape[0]),
-            "source_points": total_points,
-            "frame_id": msg.header.frame_id,
-        }
-
+            colors = np.column_stack((0.25 + 0.75 * (1.0 - norm), 0.55 + 0.35 * norm, 1.0 * norm)).astype(np.float32)
+        return {"points": np.round(pts, 4).reshape(-1).tolist(), "colors": np.round(colors, 4).reshape(-1).tolist(), "count": int(pts.shape[0]), "source_points": total_points, "frame_id": msg.header.frame_id}
     except Exception:
         return None
 
@@ -1523,8 +1762,16 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     try:
         while True:
             await websocket.send_text(json.dumps(STATE.snapshot(), ensure_ascii=False))
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(0.25)
+
     except WebSocketDisconnect:
+        return
+
+    except AssertionError:
+        # Browser tab closed/reloaded while a large PointCloud JSON frame was being sent.
+        return
+
+    except (RuntimeError, ConnectionResetError, BrokenPipeError, asyncio.CancelledError):
         return
 
 
@@ -1542,7 +1789,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rgb-topic", default="/camera/camera/color/image_raw")
     parser.add_argument("--depth-topic", default="/camera/camera/aligned_depth_to_color/image_raw")
     parser.add_argument("--pointcloud-topic", default="/camera/camera/depth/color/points")
-    parser.add_argument("--pointcloud-max-points", type=int, default=6000)
+    parser.add_argument("--pointcloud-max-points", type=int, default=30000)
     parser.add_argument("--pointcloud-max-range-m", type=float, default=5.0)
     parser.add_argument("--map-topic", default="/map")
 
@@ -1585,9 +1832,10 @@ def main() -> None:
     if not hasattr(args, "pointcloud_topic"):
         args.pointcloud_topic = "/camera/camera/depth/color/points"
     if not hasattr(args, "pointcloud_max_points"):
-        args.pointcloud_max_points = 6000
+        args.pointcloud_max_points = 30000
     if not hasattr(args, "pointcloud_max_range_m"):
         args.pointcloud_max_range_m = 5.0
+
     node = ZeriDashboardNode(args)
 
     spin_thread = threading.Thread(
