@@ -24,6 +24,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'disaster_behavior_engine_node = zeri_bringup.disaster_behavior_engine_node:main',
         ],
     },
 )

@@ -36,7 +36,7 @@ class BaseVelocityOdomSerialNode(Node):
     """
 
     def __init__(self):
-        super().__init__("base_key_odom_serial_node")
+        super().__init__("base_velocity_odom_serial_node")
 
         self.declare_parameter("port", "/dev/arduino")
         self.declare_parameter("baudrate", 115200)
@@ -363,7 +363,8 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

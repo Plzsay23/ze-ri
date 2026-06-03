@@ -20,6 +20,7 @@ setup(
     entry_points={
         'console_scripts': [
             'base_key_odom_serial_node = zeri_base.base_key_odom_serial_node:main',
+            'base_velocity_odom_serial_node = zeri_base.base_velocity_odom_serial_node:main',
         ],
     },
 )

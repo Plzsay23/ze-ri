@@ -11,6 +11,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
 from rclpy.time import Time
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 
 from sensor_msgs.msg import Image, CameraInfo
 from std_msgs.msg import Bool
@@ -63,8 +64,7 @@ class PersonMapMarkerNode(Node):
     핵심 정책:
       - 사람이 검출되면 map frame 좌표로 변환
       - 안정적으로 N회 이상 같은 위치에서 보이면 marker 생성
-      - 생성된 marker는 절대 이동하지 않음
-      - 같은 위치에서 다시 검출되면 last_seen/hits만 갱신하고 위치는 유지
+      - 같은 위치에서 다시 검출되면 같은 사람으로 보고 위치/정보를 갱신 가능
       - 사람이 시야에서 사라져도 marker는 삭제하지 않음
       - marker는 JSON 파일에 저장되어 노드 재시작 후에도 유지
     """
@@ -105,12 +105,19 @@ class PersonMapMarkerNode(Node):
 
         # 이미 생성된 marker와 같은 사람인지 판단하는 반경
         self.declare_parameter("dedupe_radius_m", 0.90)
+        self.declare_parameter("max_markers", 50)
+        self.declare_parameter("update_existing_markers", True)
+        self.declare_parameter("marker_update_alpha", 0.35)
+        self.declare_parameter("max_marker_update_jump_m", 1.20)
 
         # marker 표시 설정
         self.declare_parameter("marker_z_mode", "ground")  # ground 또는 detected
         self.declare_parameter("ground_z", 0.05)
         self.declare_parameter("sphere_scale", 0.35)
         self.declare_parameter("text_z_offset", 0.65)
+        self.declare_parameter("publish_body_marker", True)
+        self.declare_parameter("body_height_m", 1.40)
+        self.declare_parameter("body_radius_m", 0.22)
 
         self.declare_parameter(
             "storage_path",
@@ -148,11 +155,18 @@ class PersonMapMarkerNode(Node):
         self.candidate_timeout_sec = float(self.get_parameter("candidate_timeout_sec").value)
 
         self.dedupe_radius_m = float(self.get_parameter("dedupe_radius_m").value)
+        self.max_markers = int(self.get_parameter("max_markers").value)
+        self.update_existing_markers = bool(self.get_parameter("update_existing_markers").value)
+        self.marker_update_alpha = float(self.get_parameter("marker_update_alpha").value)
+        self.max_marker_update_jump_m = float(self.get_parameter("max_marker_update_jump_m").value)
 
         self.marker_z_mode = str(self.get_parameter("marker_z_mode").value)
         self.ground_z = float(self.get_parameter("ground_z").value)
         self.sphere_scale = float(self.get_parameter("sphere_scale").value)
         self.text_z_offset = float(self.get_parameter("text_z_offset").value)
+        self.publish_body_marker = bool(self.get_parameter("publish_body_marker").value)
+        self.body_height_m = float(self.get_parameter("body_height_m").value)
+        self.body_radius_m = float(self.get_parameter("body_radius_m").value)
 
         self.storage_path = Path(str(self.get_parameter("storage_path").value))
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
@@ -180,9 +194,16 @@ class PersonMapMarkerNode(Node):
 
         self.marker_pub = self.create_publisher(MarkerArray, self.marker_topic, 10)
 
-        self.create_subscription(Image, self.rgb_topic, self.on_rgb, 10)
-        self.create_subscription(Image, self.depth_topic, self.on_depth, 10)
-        self.create_subscription(CameraInfo, self.camera_info_topic, self.on_camera_info, 10)
+        sensor_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=5,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+
+        self.create_subscription(Image, self.rgb_topic, self.on_rgb, sensor_qos)
+        self.create_subscription(Image, self.depth_topic, self.on_depth, sensor_qos)
+        self.create_subscription(CameraInfo, self.camera_info_topic, self.on_camera_info, sensor_qos)
         self.create_subscription(Bool, self.vad_topic, self.on_vad, 10)
 
         self.get_logger().info(f"loading YOLO model: {self.model_path}")
@@ -453,15 +474,68 @@ class PersonMapMarkerNode(Node):
             "source_frame": source_frame,
         }
 
-    def is_near_existing_marker(self, p):
+    def is_near_existing_marker(self, p, det):
         for m in self.markers:
-            if dist_xy(p, m) <= self.dedupe_radius_m:
-                # 위치는 절대 갱신하지 않음.
-                m["last_seen"] = time.time()
-                m["seen_count"] = int(m.get("seen_count", 1)) + 1
-                self.save_storage()
+            d = dist_xy(p, m)
+            if d <= self.dedupe_radius_m:
+                self.update_existing_marker(m, p, det, d)
                 return True
         return False
+
+    def update_existing_marker(self, m, p, det, distance_m):
+        now = time.time()
+        prev_seen = float(m.get("last_seen", now))
+        dt = max(now - prev_seen, 1.0e-3)
+
+        old_x = float(m.get("x", p["x"]))
+        old_y = float(m.get("y", p["y"]))
+        old_z = float(m.get("z", p["z"]))
+        old_detected_z = float(m.get("detected_z", p.get("detected_z", p["z"])))
+
+        m["last_seen"] = now
+        m["seen_count"] = int(m.get("seen_count", 1)) + 1
+        m["conf"] = max(float(m.get("conf", 0.0)), float(det.get("conf", 0.0)))
+        m["last_conf"] = float(det.get("conf", 0.0))
+        m["depth_n"] = max(int(m.get("depth_n", 0)), int(det.get("depth_n", 0)))
+        m["last_depth_n"] = int(det.get("depth_n", 0))
+        m["source_frame"] = str(p.get("source_frame", m.get("source_frame", "")))
+        m["last_observed_x"] = float(p["x"])
+        m["last_observed_y"] = float(p["y"])
+        m["last_observed_z"] = float(p["z"])
+        m["last_match_distance"] = float(distance_m)
+
+        if self.update_existing_markers and distance_m <= self.max_marker_update_jump_m:
+            a = clamp(self.marker_update_alpha, 0.0, 1.0)
+            new_x = a * float(p["x"]) + (1.0 - a) * old_x
+            new_y = a * float(p["y"]) + (1.0 - a) * old_y
+            new_z = a * float(p["z"]) + (1.0 - a) * old_z
+            new_detected_z = (
+                a * float(p.get("detected_z", p["z"])) +
+                (1.0 - a) * old_detected_z
+            )
+
+            m["x"] = new_x
+            m["y"] = new_y
+            m["z"] = new_z
+            m["detected_z"] = new_detected_z
+            m["vx"] = (new_x - old_x) / dt
+            m["vy"] = (new_y - old_y) / dt
+            m["speed_mps"] = math.hypot(float(m["vx"]), float(m["vy"]))
+            m["moving"] = bool(float(m["speed_mps"]) >= 0.05)
+        else:
+            m["vx"] = 0.0
+            m["vy"] = 0.0
+            m["speed_mps"] = 0.0
+            m["moving"] = False
+
+        self.save_storage()
+
+        if self.update_existing_markers and int(m["seen_count"]) % 20 == 0:
+            self.get_logger().info(
+                f"PERSON MARKER UPDATED id={int(m['id'])} "
+                f"x={float(m['x']):.2f} y={float(m['y']):.2f} "
+                f"speed={float(m.get('speed_mps', 0.0)):.2f}m/s"
+            )
 
     def update_candidates(self, p, det):
         now = time.time()
@@ -516,6 +590,12 @@ class PersonMapMarkerNode(Node):
     def create_fixed_marker(self, c):
         now = time.time()
 
+        if self.max_markers > 0 and len(self.markers) >= self.max_markers:
+            self.get_logger().warn(
+                f"person marker limit reached: {len(self.markers)}/{self.max_markers}"
+            )
+            return
+
         marker_z = float(c["z"])
         if self.marker_z_mode == "ground":
             marker_z = self.ground_z
@@ -530,7 +610,13 @@ class PersonMapMarkerNode(Node):
             "last_seen": now,
             "seen_count": int(c.get("hits", 1)),
             "conf": float(c.get("conf", 0.0)),
+            "last_conf": float(c.get("conf", 0.0)),
             "depth_n": int(c.get("depth_n", 0)),
+            "last_depth_n": int(c.get("depth_n", 0)),
+            "vx": 0.0,
+            "vy": 0.0,
+            "speed_mps": 0.0,
+            "moving": False,
             "target_frame": self.target_frame,
             "source_frame": str(c.get("source_frame", "")),
             "label": f"PERSON_{self.next_id}",
@@ -589,7 +675,7 @@ class PersonMapMarkerNode(Node):
 
             det["depth_n"] = p_cam["depth_n"]
 
-            if self.is_near_existing_marker(p_for_marker):
+            if self.is_near_existing_marker(p_for_marker, det):
                 continue
 
             self.update_candidates(p_for_marker, det)
@@ -647,12 +733,42 @@ class PersonMapMarkerNode(Node):
 
         return marker
 
+    def make_body_marker(self, m, stamp):
+        marker = Marker()
+        marker.header.frame_id = self.target_frame
+        marker.header.stamp = stamp
+        marker.ns = "fixed_person_bodies"
+        marker.id = 200000 + int(m["id"])
+        marker.type = Marker.CYLINDER
+        marker.action = Marker.ADD
+
+        height = max(float(self.body_height_m), 0.2)
+        radius = max(float(self.body_radius_m), 0.05)
+        ground_z = float(m.get("z", self.ground_z))
+
+        marker.pose.position.x = float(m["x"])
+        marker.pose.position.y = float(m["y"])
+        marker.pose.position.z = ground_z + height * 0.5
+        marker.pose.orientation.w = 1.0
+
+        marker.scale.x = radius * 2.0
+        marker.scale.y = radius * 2.0
+        marker.scale.z = height
+
+        marker.color.r = 1.0
+        marker.color.g = 0.25
+        marker.color.b = 0.05
+        marker.color.a = 0.32
+        return marker
+
     def publish_markers(self):
         stamp = self.get_clock().now().to_msg()
         arr = MarkerArray()
 
         for m in self.markers:
             arr.markers.append(self.make_sphere_marker(m, stamp))
+            if self.publish_body_marker:
+                arr.markers.append(self.make_body_marker(m, stamp))
             arr.markers.append(self.make_text_marker(m, stamp))
 
         self.marker_pub.publish(arr)

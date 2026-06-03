@@ -23,6 +23,7 @@ setup(
             'camera_depth_follow_node = zeri_camera.camera_depth_follow_node:main',
             'camera_person_follow_node = zeri_camera.camera_person_follow_node:main',
             'person_map_marker_node = zeri_camera.person_map_marker_node:main',
+            'rgbd_pointcloud_node = zeri_camera.rgbd_pointcloud_node:main',
         ],
     },
 )
