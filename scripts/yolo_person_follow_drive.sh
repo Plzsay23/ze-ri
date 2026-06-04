@@ -57,6 +57,10 @@ MAX_PERSON_MARKERS="${MAX_PERSON_MARKERS:-50}"
 UPDATE_PERSON_MARKERS="${UPDATE_PERSON_MARKERS:-true}"
 PERSON_MARKER_UPDATE_ALPHA="${PERSON_MARKER_UPDATE_ALPHA:-0.35}"
 PERSON_MARKER_UPDATE_JUMP_M="${PERSON_MARKER_UPDATE_JUMP_M:-1.20}"
+PERSON_MOVING_SPEED_THRESHOLD="${PERSON_MOVING_SPEED_THRESHOLD:-0.30}"
+PERSON_STATIC_SPEED_THRESHOLD="${PERSON_STATIC_SPEED_THRESHOLD:-0.10}"
+PERSON_TEMPORARY_TTL_SEC="${PERSON_TEMPORARY_TTL_SEC:-3.0}"
+PERSON_PERSISTENT_CONFIRM_SEC="${PERSON_PERSISTENT_CONFIRM_SEC:-2.0}"
 START_DEPTH_POINTCLOUD="${START_DEPTH_POINTCLOUD:-true}"
 POINTCLOUD_TOPIC="${POINTCLOUD_TOPIC:-/zeri/vlm/points}"
 POINTCLOUD_HZ="${POINTCLOUD_HZ:-5.0}"
@@ -181,6 +185,10 @@ echo "  PERSON_MARKERS_FILE=$PERSON_MARKERS_FILE"
 echo "  MAX_PERSON_MARKERS=$MAX_PERSON_MARKERS"
 echo "  UPDATE_PERSON_MARKERS=$UPDATE_PERSON_MARKERS"
 echo "  PERSON_MARKER_UPDATE_ALPHA=$PERSON_MARKER_UPDATE_ALPHA"
+echo "  PERSON_MOVING_SPEED_THRESHOLD=$PERSON_MOVING_SPEED_THRESHOLD"
+echo "  PERSON_STATIC_SPEED_THRESHOLD=$PERSON_STATIC_SPEED_THRESHOLD"
+echo "  PERSON_TEMPORARY_TTL_SEC=$PERSON_TEMPORARY_TTL_SEC"
+echo "  PERSON_PERSISTENT_CONFIRM_SEC=$PERSON_PERSISTENT_CONFIRM_SEC"
 echo "  START_DEPTH_POINTCLOUD=$START_DEPTH_POINTCLOUD"
 echo "  POINTCLOUD_TOPIC=$POINTCLOUD_TOPIC"
 echo "  BASE_KEY_HZ=$BASE_KEY_HZ"
@@ -192,7 +200,20 @@ echo
 
 require_file "$HOME/ze-ri/ros2_ws/install/zeri_voice/bin/respeaker_vad_doa_node"
 require_file "$HOME/ze-ri/ros2_ws/install/zeri_voice/bin/voice_stop_guard_node"
-require_file "$HOME/ze-ri/ros2_ws/install/zeri_camera/bin/camera_person_follow_node"
+
+# ROS2 험블 기준 일반적인 Python 노드 설치 경로
+CAMERA_NODE_BIN="$HOME/ze-ri/ros2_ws/install/zeri_camera/bin/camera_person_follow_node"
+CAMERA_NODE_LIB="$HOME/ze-ri/ros2_ws/install/zeri_camera/lib/zeri_camera/camera_person_follow_node"
+
+if [ "$START_PERSON_FOLLOW" = "true" ]; then
+    if [ ! -f "$CAMERA_NODE_BIN" ] && [ ! -f "$CAMERA_NODE_LIB" ]; then
+        echo "[ERROR] camera_person_follow_node 파일을 찾을 수 없습니다."
+        echo "경로 1: $CAMERA_NODE_BIN"
+        echo "경로 2: $CAMERA_NODE_LIB"
+        exit 1
+    fi
+fi
+
 require_file "$HOME/ze-ri/ros2_ws/install/zeri_camera/bin/person_map_marker_node"
 
 sed "s|scan_topic: .*|scan_topic: $SLAM_SCAN_TOPIC|" \
@@ -363,6 +384,10 @@ start_node "10_person_map_marker" \
     -p update_existing_markers:="$UPDATE_PERSON_MARKERS" \
     -p marker_update_alpha:="$PERSON_MARKER_UPDATE_ALPHA" \
     -p max_marker_update_jump_m:="$PERSON_MARKER_UPDATE_JUMP_M" \
+    -p moving_speed_threshold_mps:="$PERSON_MOVING_SPEED_THRESHOLD" \
+    -p static_speed_threshold_mps:="$PERSON_STATIC_SPEED_THRESHOLD" \
+    -p temporary_marker_ttl_sec:="$PERSON_TEMPORARY_TTL_SEC" \
+    -p persistent_confirm_sec:="$PERSON_PERSISTENT_CONFIRM_SEC" \
     -p publish_body_marker:=true
 
 if [ "$START_DEPTH_POINTCLOUD" = "true" ]; then

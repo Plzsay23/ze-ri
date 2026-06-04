@@ -14,14 +14,42 @@ PERSON_MARKERS_FILE="${PERSON_MARKERS_FILE:-$ROOT/data/person_markers.json}"
 CLEAR_PERSON_MARKERS_ON_START="${CLEAR_PERSON_MARKERS_ON_START:-true}"
 MAX_PERSON_MARKERS="${MAX_PERSON_MARKERS:-50}"
 START_BEHAVIOR_ENGINE="${START_BEHAVIOR_ENGINE:-true}"
-BEHAVIOR_AUTO_APPROACH="${BEHAVIOR_AUTO_APPROACH:-false}"
-BEHAVIOR_APPROACH_DISTANCE_M="${BEHAVIOR_APPROACH_DISTANCE_M:-0.85}"
-BEHAVIOR_ARRIVAL_MODE="${BEHAVIOR_ARRIVAL_MODE:-test_dwell}"
+BEHAVIOR_AUTO_APPROACH="${BEHAVIOR_AUTO_APPROACH:-true}"
+BEHAVIOR_APPROACH_DISTANCE_M="${BEHAVIOR_APPROACH_DISTANCE_M:-0.30}"
+BEHAVIOR_PERSON_FRESH_TIMEOUT_SEC="${BEHAVIOR_PERSON_FRESH_TIMEOUT_SEC:-5.0}"
+BEHAVIOR_ARRIVAL_MODE="${BEHAVIOR_ARRIVAL_MODE:-vlm_wait}"
 BEHAVIOR_ARRIVAL_DWELL_SEC="${BEHAVIOR_ARRIVAL_DWELL_SEC:-5.0}"
+BEHAVIOR_MISSION_EVENT_TOPIC="${BEHAVIOR_MISSION_EVENT_TOPIC:-/zeri/mission/event}"
+BEHAVIOR_ENABLE_SEARCH="${BEHAVIOR_ENABLE_SEARCH:-true}"
+BEHAVIOR_SEARCH_WAYPOINTS="${BEHAVIOR_SEARCH_WAYPOINTS:-}"
+BEHAVIOR_SEARCH_STEP_M="${BEHAVIOR_SEARCH_STEP_M:-0.5}"
+BEHAVIOR_SEARCH_PAUSE_SEC="${BEHAVIOR_SEARCH_PAUSE_SEC:-2.0}"
 START_RVIZ="false"
-if [ "${1:-}" = "--rviz" ]; then
-  START_RVIZ="true"
-fi
+TEST_MODE="false"
+
+for arg in "$@"; do
+  case "$arg" in
+    --rviz)
+      START_RVIZ="true"
+      ;;
+    --test)
+      TEST_MODE="true"
+      BEHAVIOR_ARRIVAL_MODE="test_dwell"
+      BEHAVIOR_ARRIVAL_DWELL_SEC="${BEHAVIOR_ARRIVAL_DWELL_SEC:-5.0}"
+      ;;
+    -h|--help)
+      echo "Usage: $0 [--rviz] [--test]"
+      echo "Default: auto approach, wait for VLM after arrival"
+      echo "Test: --test waits 5 sec and resumes automatically"
+      exit 0
+      ;;
+    *)
+      echo "[ERROR] unknown argument: $arg"
+      echo "Usage: $0 [--rviz] [--test]"
+      exit 1
+      ;;
+  esac
+done
 
 PIDS=()
 
@@ -132,15 +160,22 @@ echo "  MAX_PERSON_MARKERS=$MAX_PERSON_MARKERS"
 echo "  START_BEHAVIOR_ENGINE=$START_BEHAVIOR_ENGINE"
 echo "  BEHAVIOR_AUTO_APPROACH=$BEHAVIOR_AUTO_APPROACH"
 echo "  BEHAVIOR_APPROACH_DISTANCE_M=$BEHAVIOR_APPROACH_DISTANCE_M"
+echo "  BEHAVIOR_PERSON_FRESH_TIMEOUT_SEC=$BEHAVIOR_PERSON_FRESH_TIMEOUT_SEC"
 echo "  BEHAVIOR_ARRIVAL_MODE=$BEHAVIOR_ARRIVAL_MODE"
 echo "  BEHAVIOR_ARRIVAL_DWELL_SEC=$BEHAVIOR_ARRIVAL_DWELL_SEC"
+echo "  BEHAVIOR_MISSION_EVENT_TOPIC=$BEHAVIOR_MISSION_EVENT_TOPIC"
+echo "  BEHAVIOR_ENABLE_SEARCH=$BEHAVIOR_ENABLE_SEARCH"
+echo "  BEHAVIOR_SEARCH_WAYPOINTS=$BEHAVIOR_SEARCH_WAYPOINTS"
+echo "  BEHAVIOR_SEARCH_STEP_M=$BEHAVIOR_SEARCH_STEP_M"
+echo "  BEHAVIOR_SEARCH_PAUSE_SEC=$BEHAVIOR_SEARCH_PAUSE_SEC"
 echo "  RVIZ=$START_RVIZ"
+echo "  TEST_MODE=$TEST_MODE"
 echo
 echo "Important:"
 echo "  Nav2 command velocity is configured to publish /cmd_vel_raw."
 echo "  LiDAR/depth safety still gates /cmd_vel_raw -> /cmd_vel."
 echo "  Do not use YOLO follow voice command and Nav2 goal driving at the same time yet."
-echo "  Behavior engine is manual by default. Publish go_person/go_nearest commands to move."
+echo "  Behavior engine auto approach is enabled by default. Use cancel if needed."
 echo
 
 require_file "$ROOT/scripts/yolo_person_follow_drive.sh"
@@ -176,20 +211,33 @@ start_node "02_nav2" \
     autostart:=true
 
 if [ "$START_BEHAVIOR_ENGINE" = "true" ]; then
+  BEHAVIOR_ROS_ARGS=(
+    -p marker_topic:=/zeri/person_markers
+    -p command_topic:=/zeri/behavior/command
+    -p state_topic:=/zeri/behavior/state
+    -p vlm_event_topic:=/zeri/behavior/vlm_event
+    -p mission_event_topic:="$BEHAVIOR_MISSION_EVENT_TOPIC"
+    -p nav_action_name:=/navigate_to_pose
+    -p target_frame:=map
+    -p base_frame:=base_link
+    -p approach_distance_m:="$BEHAVIOR_APPROACH_DISTANCE_M"
+    -p person_fresh_timeout_sec:="$BEHAVIOR_PERSON_FRESH_TIMEOUT_SEC"
+    -p auto_approach:="$BEHAVIOR_AUTO_APPROACH"
+    -p arrival_mode:="$BEHAVIOR_ARRIVAL_MODE"
+    -p arrival_dwell_sec:="$BEHAVIOR_ARRIVAL_DWELL_SEC"
+    -p enable_search:="$BEHAVIOR_ENABLE_SEARCH"
+    -p search_step_m:="$BEHAVIOR_SEARCH_STEP_M"
+    -p search_pause_sec:="$BEHAVIOR_SEARCH_PAUSE_SEC"
+  )
+
+  if [ -n "$BEHAVIOR_SEARCH_WAYPOINTS" ]; then
+    BEHAVIOR_ROS_ARGS+=(-p search_waypoints:="$BEHAVIOR_SEARCH_WAYPOINTS")
+  fi
+
   start_node "03_behavior_engine" \
-    env PYTHONPATH="$ROOT/ros2_ws/install/zeri_bringup/lib/python3.12/site-packages:$PYTHONPATH" \
+    env PYTHONPATH="$ROOT/ros2_ws/src/zeri_bringup:$ROOT/ros2_ws/install/zeri_bringup/lib/python3.12/site-packages:$PYTHONPATH" \
     "$ROOT/.venv/bin/python" -m zeri_bringup.disaster_behavior_engine_node --ros-args \
-      -p marker_topic:=/zeri/person_markers \
-      -p command_topic:=/zeri/behavior/command \
-      -p state_topic:=/zeri/behavior/state \
-      -p vlm_event_topic:=/zeri/behavior/vlm_event \
-      -p nav_action_name:=/navigate_to_pose \
-      -p target_frame:=map \
-      -p base_frame:=base_link \
-      -p approach_distance_m:="$BEHAVIOR_APPROACH_DISTANCE_M" \
-      -p auto_approach:="$BEHAVIOR_AUTO_APPROACH" \
-      -p arrival_mode:="$BEHAVIOR_ARRIVAL_MODE" \
-      -p arrival_dwell_sec:="$BEHAVIOR_ARRIVAL_DWELL_SEC"
+      "${BEHAVIOR_ROS_ARGS[@]}"
 else
   echo "[SKIP] 03_behavior_engine"
 fi
@@ -208,6 +256,7 @@ echo "  ros2 topic echo /cmd_vel_raw"
 echo "  ros2 topic echo /cmd_vel"
 echo "  ros2 topic echo /zeri/behavior/state"
 echo "  ros2 topic echo /zeri/behavior/vlm_event"
+echo "  ros2 topic echo /zeri/mission/event"
 echo
 echo "Behavior commands:"
 echo "  ros2 topic pub --once /zeri/behavior/command std_msgs/msg/String \"{data: 'go_nearest'}\""
@@ -215,6 +264,7 @@ echo "  ros2 topic pub --once /zeri/behavior/command std_msgs/msg/String \"{data
 echo "  ros2 topic pub --once /zeri/behavior/command std_msgs/msg/String \"{data: 'auto_on'}\""
 echo "  ros2 topic pub --once /zeri/behavior/command std_msgs/msg/String \"{data: 'cancel'}\""
 echo "  ros2 topic pub --once /zeri/behavior/command std_msgs/msg/String \"{data: 'resume'}\""
+echo "  ros2 topic pub --once /zeri/behavior/command std_msgs/msg/String \"{data: 'reset_visited'}\""
 echo
 echo "In RViz:"
 echo "  1. Set Fixed Frame to map"

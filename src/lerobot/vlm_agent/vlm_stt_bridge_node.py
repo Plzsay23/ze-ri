@@ -776,6 +776,10 @@ class ZeriVLMSTTBridgeNode(Node):
         self.declare_parameter("vlm_input_rgb_topic", "/zeri/vlm/input_rgb")
         self.declare_parameter("vlm_input_depth_topic", "/zeri/vlm/input_depth")
         self.declare_parameter("inference_status_topic", "/zeri/vlm/inference_status")
+        self.declare_parameter("mission_event_topic", "/zeri/mission/event")
+        self.declare_parameter("enable_mission_events", True)
+        self.declare_parameter("behavior_command_topic", "/zeri/behavior/command")
+        self.declare_parameter("complete_behavior_on_vla_success", True)
 
         self.declare_parameter("tts_status_topic", "/zeri/tts/status")
         self.declare_parameter("stt_mute_topic", "/zeri/stt/mute")
@@ -830,6 +834,12 @@ class ZeriVLMSTTBridgeNode(Node):
         self.vlm_input_rgb_topic = str(self.get_parameter("vlm_input_rgb_topic").value)
         self.vlm_input_depth_topic = str(self.get_parameter("vlm_input_depth_topic").value)
         self.inference_status_topic = str(self.get_parameter("inference_status_topic").value)
+        self.mission_event_topic = str(self.get_parameter("mission_event_topic").value)
+        self.enable_mission_events = bool(self.get_parameter("enable_mission_events").value)
+        self.behavior_command_topic = str(self.get_parameter("behavior_command_topic").value)
+        self.complete_behavior_on_vla_success = bool(
+            self.get_parameter("complete_behavior_on_vla_success").value
+        )
 
         self.tts_status_topic = str(self.get_parameter("tts_status_topic").value)
         self.stt_mute_topic = str(self.get_parameter("stt_mute_topic").value)
@@ -949,6 +959,8 @@ class ZeriVLMSTTBridgeNode(Node):
         self.waiting_for_home_return = False
         self.active_vla_arm: Optional[str] = None
         self.active_vla_selected_task: Optional[str] = None
+        self.active_mission_person_id: Optional[str] = None
+        self.active_mission_event: Optional[Dict[str, Any]] = None
 
         self.latest_vad = False
         self.latest_vad_time = 0.0
@@ -992,6 +1004,16 @@ class ZeriVLMSTTBridgeNode(Node):
             self.stt_callback,
             reliable_qos,
         )
+
+        if self.enable_mission_events:
+            self.mission_event_sub = self.create_subscription(
+                String,
+                self.mission_event_topic,
+                self.mission_event_callback,
+                reliable_qos,
+            )
+        else:
+            self.mission_event_sub = None
 
         self.tts_status_sub = self.create_subscription(
             String,
@@ -1080,6 +1102,11 @@ class ZeriVLMSTTBridgeNode(Node):
             self.stt_mute_topic,
             reliable_qos,
         )
+        self.behavior_command_publisher = self.create_publisher(
+            String,
+            self.behavior_command_topic,
+            reliable_qos,
+        )
         self.arm_home_request_publisher = self.create_publisher(
             Bool,
             self.arm_home_request_topic,
@@ -1095,6 +1122,7 @@ class ZeriVLMSTTBridgeNode(Node):
         self.get_logger().info(f"  RGB input:         {self.rgb_topic}")
         self.get_logger().info(f"  Depth input:       {self.depth_topic}")
         self.get_logger().info(f"  STT input:         {self.stt_topic}")
+        self.get_logger().info(f"  Mission event:     {self.mission_event_topic}")
         self.get_logger().info(f"  TTS status:        {self.tts_status_topic}")
         self.get_logger().info(f"  VLA status:        {self.vla_status_topic}")
         self.get_logger().info(f"  Left wrist snap:   {self.left_wrist_snapshot_topic}")
@@ -1112,6 +1140,7 @@ class ZeriVLMSTTBridgeNode(Node):
         self.get_logger().info(f"  VLM status:        {self.inference_status_topic}")
         self.get_logger().info(f"  STT mute:          {self.stt_mute_topic}")
         self.get_logger().info(f"  Arm home request:  {self.arm_home_request_topic}")
+        self.get_logger().info(f"  Behavior command:  {self.behavior_command_topic}")
 
         self.get_logger().info("Runtime settings:")
         self.get_logger().info(f"  enable_vla: {self.enable_vla}")
@@ -1125,6 +1154,10 @@ class ZeriVLMSTTBridgeNode(Node):
             f"  wake_listen_window_sec: {self.wake_listen_window_sec}"
         )
         self.get_logger().info(f"  use_vad_gate: {self.use_vad_gate}")
+        self.get_logger().info(f"  enable_mission_events: {self.enable_mission_events}")
+        self.get_logger().info(
+            f"  complete_behavior_on_vla_success: {self.complete_behavior_on_vla_success}"
+        )
         self.get_logger().info(f"  vad_hold_sec: {self.vad_hold_sec}")
         self.get_logger().info(
             f"  stt_block_after_tts_sec: {self.stt_block_after_tts_sec}"
@@ -1259,8 +1292,14 @@ class ZeriVLMSTTBridgeNode(Node):
 
     def finish_vla_and_maybe_release(self, reason: str, success: bool) -> None:
         should_release = False
+        should_complete_behavior = False
 
         with self.pipeline_lock:
+            should_complete_behavior = (
+                success
+                and self.complete_behavior_on_vla_success
+                and self.active_mission_person_id is not None
+            )
             self.waiting_for_vla = False
             self.vla_active = False
             self.vla_deadline = 0.0
@@ -1268,6 +1307,9 @@ class ZeriVLMSTTBridgeNode(Node):
             self.waiting_for_home_return = False
             self.active_vla_arm = None
             self.active_vla_selected_task = None
+            if should_complete_behavior:
+                self.active_mission_person_id = None
+                self.active_mission_event = None
 
             if not self.waiting_for_tts and not self.tts_active:
                 should_release = True
@@ -1281,6 +1323,9 @@ class ZeriVLMSTTBridgeNode(Node):
             self.release_pipeline_block(reason)
         else:
             self.publish_inference_status(f"vla_done_waiting_for_tts: {reason}")
+
+        if should_complete_behavior:
+            self.publish_behavior_command("complete_handoff")
 
     def is_stt_input_blocked(self) -> bool:
         now = time.time()
@@ -1418,6 +1463,88 @@ class ZeriVLMSTTBridgeNode(Node):
             self.vla_deadline = time.time() + self.home_return_timeout_sec
         self.publish_inference_status("arm_home_request_published_waiting_for_home")
         self.get_logger().info(f"[ARM HOME REQUEST] true -> {self.arm_home_request_topic}")
+
+    def publish_behavior_command(self, command: str) -> None:
+        msg = String()
+        msg.data = command
+        self.behavior_command_publisher.publish(msg)
+        self.get_logger().info(f"[BEHAVIOR COMMAND] {command} -> {self.behavior_command_topic}")
+
+    def enqueue_vlm_text(self, text: str, reason: str) -> bool:
+        text = self.normalize_stt_text(text)
+        if not text:
+            return False
+
+        if self.is_stt_input_blocked():
+            self.get_logger().info(f"Ignored VLM trigger while pipeline busy: {reason}")
+            self.publish_inference_status(f"ignored_trigger_pipeline_busy: {reason}")
+            return False
+
+        self.last_inference_request_time = time.time()
+        self.begin_pipeline_block(reason)
+        self.publish_inference_status(f"accepted_vlm_trigger: {reason}")
+
+        try:
+            self.text_queue.put_nowait(text)
+            return True
+        except queue.Full:
+            try:
+                dropped = self.text_queue.get_nowait()
+                self.get_logger().warn(f"Dropped old VLM text due to full queue: {dropped}")
+            except queue.Empty:
+                pass
+
+            try:
+                self.text_queue.put_nowait(text)
+                return True
+            except queue.Full:
+                self.get_logger().error("Failed to enqueue VLM trigger text.")
+                self.publish_inference_status("mission_event_queue_full_error")
+                self.publish_led(self.led_on_error)
+                self.release_pipeline_block("mission_event_queue_full_error")
+                return False
+
+    def mission_event_callback(self, msg: String) -> None:
+        try:
+            data = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn(f"Invalid mission event JSON: {msg.data}")
+            return
+
+        event = str(data.get("event") or "").strip()
+        if event != "arrived_at_person":
+            return
+
+        person_id = str(
+            data.get("selected_person_id")
+            or data.get("person_id")
+            or "person"
+        ).strip()
+        target_context = data.get("target_context")
+        if not isinstance(target_context, dict):
+            target_context = {}
+
+        distance = target_context.get("distance_m")
+        distance_text = ""
+        try:
+            if distance is not None:
+                distance_text = f" 현재 사람과의 추정 거리는 {float(distance):.2f}미터다."
+        except (TypeError, ValueError):
+            distance_text = ""
+
+        with self.pipeline_lock:
+            self.active_mission_person_id = person_id
+            self.active_mission_event = data
+
+        prompt = (
+            "자율주행으로 구조 대상 사람 앞에 도착했다. "
+            f"대상 ID는 {person_id}이다.{distance_text} "
+            "카메라 장면을 보고 먼저 사람에게 상태를 확인하는 짧은 말을 하라. "
+            "호흡 곤란, 통신 필요, 의식 저하가 의심되면 필요한 VLA 물품 전달 task를 선택하라."
+        )
+
+        if self.enqueue_vlm_text(prompt, "mission_event_arrived_at_person"):
+            self.get_logger().info(f"[MISSION EVENT RX] arrived_at_person: {msg.data}")
 
     def run_handoff_verification(self, data: Dict[str, Any]) -> None:
         arm = str(data.get("arm") or self.active_vla_arm or "").strip().lower()
