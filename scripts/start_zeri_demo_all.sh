@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Ze-Ri demo launcher: camera + autonomy + VLA + VLM + TTS + dashboard + Bluetooth LED
+# Ze-Ri demo launcher: camera + autonomy + VLA + VLM + TTS + dashboard
 # STT is intentionally NOT started by this script.
 
 ROOT="${ZERI_ROOT:-$HOME/ze-ri}"
@@ -18,16 +18,8 @@ START_VLA="${START_VLA:-true}"
 START_AUTONOMY="${START_AUTONOMY:-true}"
 START_VLM="${START_VLM:-true}"
 START_DASHBOARD="${START_DASHBOARD:-true}"
-START_BT_LED="${START_BT_LED:-true}"
-
-# Bluetooth LED
-BT_MAC="${BT_MAC:-98:D3:41:FD:80:4D}"
-BT_CHANNEL="${BT_CHANNEL:-1}"
-RFCOMM_DEV="${RFCOMM_DEV:-/dev/rfcomm0}"
-RFCOMM_ID="${RFCOMM_ID:-0}"
-
 # TTS
-TTS_RATE="${TTS_RATE:-+25%}"
+# Speed is fixed inside tts_edge_node.py. Do not control it from this launcher.
 TTS_VOICE="${TTS_VOICE:-ko-KR-SunHiNeural}"
 
 # Dashboard
@@ -53,8 +45,6 @@ AUTONOMY_SCRIPT="${AUTONOMY_SCRIPT:-$ROOT/scripts/person_follow_depth_lidar_driv
 VLA_SCRIPT="${VLA_SCRIPT:-$ROOT/scripts/start_vla_yolo_handoff.sh}"
 TTS_SCRIPT="${TTS_SCRIPT:-$ROOT/src/lerobot/vlm_agent/tts_edge_node.py}"
 VLM_SCRIPT="${VLM_SCRIPT:-$ROOT/src/lerobot/vlm_agent/vlm_stt_bridge_node.py}"
-BT_LED_SCRIPT="${BT_LED_SCRIPT:-$ROOT/tools/bt_led_ros_node.py}"
-
 if [[ -x "$ROOT/dashboard/dashboard_server.py" ]]; then
   DASHBOARD_SCRIPT="${DASHBOARD_SCRIPT:-$ROOT/dashboard/dashboard_server.py}"
 elif [[ -x "$ROOT/dashboard_server.py" ]]; then
@@ -67,8 +57,6 @@ fi
 
 PIDS=()
 NAMES=()
-RFCOMM_PID=""
-
 say() {
   echo "[$(date +%H:%M:%S)] $*"
 }
@@ -122,36 +110,6 @@ wait_topic() {
   done
 }
 
-setup_rfcomm() {
-  if [[ "$START_BT_LED" != "true" ]]; then
-    return 0
-  fi
-
-  say "SETUP Bluetooth RFCOMM $RFCOMM_DEV -> $BT_MAC channel $BT_CHANNEL"
-  say "sudo may ask for password."
-  sudo -v
-
-  sudo rfcomm release "$RFCOMM_ID" >/dev/null 2>&1 || true
-
-  local log="$LOG_DIR/rfcomm_connect.log"
-  say "START rfcomm_connect"
-  sudo rfcomm connect "$RFCOMM_ID" "$BT_MAC" "$BT_CHANNEL" > "$log" 2>&1 &
-  RFCOMM_PID=$!
-  echo "$RFCOMM_PID" > "$LOG_DIR/rfcomm_connect.pid"
-  say "  pid=$RFCOMM_PID log=$log"
-
-  for _ in $(seq 1 20); do
-    if [[ -e "$RFCOMM_DEV" ]]; then
-      sudo chmod 666 "$RFCOMM_DEV" || true
-      say "  OK $RFCOMM_DEV"
-      return 0
-    fi
-    sleep 0.5
-  done
-
-  say "  WARN $RFCOMM_DEV not created. BT LED node may fail."
-}
-
 print_summary() {
   echo
   say "============================================================"
@@ -161,12 +119,11 @@ print_summary() {
   say "STT is NOT started by this launcher."
   say ""
   say "START_CAMERA=$START_CAMERA"
-  say "START_TTS=$START_TTS rate=$TTS_RATE voice=$TTS_VOICE"
+  say "START_TTS=$START_TTS voice=$TTS_VOICE"
   say "START_VLA=$START_VLA"
   say "START_AUTONOMY=$START_AUTONOMY"
   say "START_VLM=$START_VLM"
   say "START_DASHBOARD=$START_DASHBOARD http://<ROBOT_IP>:$DASHBOARD_PORT"
-  say "START_BT_LED=$START_BT_LED dev=$RFCOMM_DEV mac=$BT_MAC"
   say ""
   say "RGB_TOPIC=$RGB_TOPIC"
   say "DEPTH_TOPIC=$DEPTH_TOPIC"
@@ -196,9 +153,6 @@ cleanup() {
     fi
   done
 
-  if [[ -n "${RFCOMM_PID:-}" ]] && kill -0 "$RFCOMM_PID" 2>/dev/null; then
-    kill "$RFCOMM_PID" 2>/dev/null || true
-  fi
 
   sleep 1
 
@@ -208,13 +162,6 @@ cleanup() {
     fi
   done
 
-  if [[ -n "${RFCOMM_PID:-}" ]] && kill -0 "$RFCOMM_PID" 2>/dev/null; then
-    kill -9 "$RFCOMM_PID" 2>/dev/null || true
-  fi
-
-  if [[ "$START_BT_LED" == "true" ]]; then
-    sudo rfcomm release "$RFCOMM_ID" >/dev/null 2>&1 || true
-  fi
 
   say "logs: $LOG_DIR"
   exit "$code"
@@ -246,10 +193,6 @@ print_summary
 [[ "$START_AUTONOMY" == "true" ]] && require_file "$AUTONOMY_SCRIPT" "autonomy launcher"
 [[ "$START_VLM" == "true" ]] && require_file "$VLM_SCRIPT" "VLM bridge"
 [[ "$START_DASHBOARD" == "true" ]] && require_file "$DASHBOARD_SCRIPT" "dashboard server"
-[[ "$START_BT_LED" == "true" ]] && require_file "$BT_LED_SCRIPT" "BT LED ROS node"
-
-setup_rfcomm
-
 if [[ "$START_CAMERA" == "true" ]]; then
   start_bg "01_camera_rgbd_pointcloud" bash "$CAMERA_SCRIPT"
   wait_topic "$RGB_TOPIC" 30 || true
@@ -261,8 +204,7 @@ if [[ "$START_TTS" == "true" ]]; then
   start_bg "02_tts_edge" \
     python3 "$TTS_SCRIPT" \
       --ros-args \
-      -p voice:="$TTS_VOICE" \
-      -p rate:="$TTS_RATE"
+      -p voice:="$TTS_VOICE"
 fi
 
 if [[ "$START_VLA" == "true" ]]; then
@@ -297,13 +239,8 @@ if [[ "$START_VLM" == "true" ]]; then
   wait_topic "/zeri/vlm/inference_status" 15 || true
 fi
 
-if [[ "$START_BT_LED" == "true" ]]; then
-  start_bg "06_bt_led_ros_node" \
-    python3 "$BT_LED_SCRIPT"
-fi
-
 if [[ "$START_DASHBOARD" == "true" ]]; then
-  start_bg "07_dashboard" \
+  start_bg "06_dashboard" \
     python3 "$DASHBOARD_SCRIPT" \
       --host "$DASHBOARD_HOST" \
       --port "$DASHBOARD_PORT" \
@@ -340,10 +277,4 @@ while true; do
       exit 1
     fi
   done
-
-  if [[ "$START_BT_LED" == "true" && -n "${RFCOMM_PID:-}" ]]; then
-    if ! kill -0 "$RFCOMM_PID" 2>/dev/null; then
-      say "WARN rfcomm process exited. BT LED may be disconnected. log=$LOG_DIR/rfcomm_connect.log"
-    fi
-  fi
 done

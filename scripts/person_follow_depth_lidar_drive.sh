@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 
-set -eo pipefail
+set -euo pipefail
 
 ROOT="$HOME/ze-ri"
 LOG_DIR="$ROOT/logs/person_follow_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$LOG_DIR"
 
+set +u
 source "$ROOT/source_zeri.sh"
-export PYTHONPATH="$ROOT/.venv/lib/python3.12/site-packages:$PYTHONPATH"
+set -u
+export PYTHONPATH="$ROOT/.venv/lib/python3.12/site-packages:${PYTHONPATH:-}"
 
 # =========================
 # User tunables
@@ -16,23 +18,55 @@ export PYTHONPATH="$ROOT/.venv/lib/python3.12/site-packages:$PYTHONPATH"
 ARDUINO_PORT="${ARDUINO_PORT:-/dev/arduino}"
 LIDAR_PORT="${LIDAR_PORT:-/dev/lidar}"
 
-# RealSense
-# 카메라는 기본적으로 이 스크립트에서 실행하지 않습니다.
-# 별도 터미널에서 scripts/realsense_pointcloud.sh 를 먼저 실행하십시오.
+# RealSense / Ze-Ri public camera topics
+# 기본 운용 정책: 카메라는 별도 터미널에서 scripts/camera_rgbd.sh 로 먼저 실행한다.
+# 이 스크립트는 그 토픽을 받아 사람 추종/안전정지/미션 이벤트만 실행한다.
+# 단독 테스트가 필요하면 START_CAMERA=true 로 camera_rgbd.sh까지 같이 띄울 수 있다.
 START_CAMERA="${START_CAMERA:-false}"
 WAIT_CAMERA_TOPICS="${WAIT_CAMERA_TOPICS:-true}"
-CAMERA_SERIAL="${CAMERA_SERIAL:-_944122071303}"
-RGB_TOPIC="${RGB_TOPIC:-/camera/camera/color/image_raw}"
-DEPTH_TOPIC="${DEPTH_TOPIC:-/camera/camera/aligned_depth_to_color/image_raw}"
+REQUIRE_CAMERA_TOPICS="${REQUIRE_CAMERA_TOPICS:-true}"
+REQUIRE_POINTCLOUD_TOPIC="${REQUIRE_POINTCLOUD_TOPIC:-false}"
+CAMERA_SERIAL="${CAMERA_SERIAL:-944122071303}"
+CAMERA_SCRIPT="${CAMERA_SCRIPT:-$ROOT/scripts/camera_rgbd.sh}"
+CAMERA_NODE="${CAMERA_NODE:-/camera/camera}"
+
+# camera_rgbd.sh / dashboard / VLM bridge 기준 공용 토픽
+RGB_TOPIC="${RGB_TOPIC:-/zeri/vlm/input_rgb}"
+DEPTH_TOPIC="${DEPTH_TOPIC:-/zeri/vlm/input_depth}"
+POINTS_TOPIC="${POINTS_TOPIC:-/zeri/vlm/pointcloud}"
+
+# camera_person_follow_node는 CameraInfo가 필요할 수 있다.
+# camera_rgbd.sh는 내부 RealSense /camera/camera/* 토픽을 유지하므로 camera_info는 이쪽을 사용한다.
 CAMERA_INFO_TOPIC="${CAMERA_INFO_TOPIC:-/camera/camera/color/camera_info}"
-POINTS_TOPIC="${POINTS_TOPIC:-/camera/camera/depth/color/points}"
 
 # Follow / safety topics
+# Flow:
+#   camera_person_follow_node -> PERSON_CMD_TOPIC
+#   hri_base_stop_gate        -> CMD_RAW_TOPIC
+#   depth_lidar_safety_guard  -> CMD_OUT_TOPIC
+#   base_key_odom_serial_node -> Arduino base
+PERSON_CMD_TOPIC="${PERSON_CMD_TOPIC:-/cmd_vel_follow_raw}"
 CMD_RAW_TOPIC="${CMD_RAW_TOPIC:-/cmd_vel_raw}"
 CMD_OUT_TOPIC="${CMD_OUT_TOPIC:-/cmd_vel}"
 SCAN_TOPIC="${SCAN_TOPIC:-/scan_front}"
 PERSON_STATE_TOPIC="${PERSON_STATE_TOPIC:-/zeri/person_follow/state}"
 SAFETY_STATE_TOPIC="${SAFETY_STATE_TOPIC:-/zeri/safety_guard/state}"
+MISSION_EVENT_TOPIC="${MISSION_EVENT_TOPIC:-/zeri/mission/event}"
+
+# VLM/HRI 호출 거리는 실제 바퀴 정지 거리와 분리한다.
+# 기본값 0.75m: 이전 1.00m보다 더 가까워졌을 때 VLM 대화를 시작한다.
+MISSION_EVENT_DISTANCE_M="${MISSION_EVENT_DISTANCE_M:-0.75}"
+MISSION_EVENT_STABLE_SEC="${MISSION_EVENT_STABLE_SEC:-1.0}"
+MISSION_EVENT_COOLDOWN_SEC="${MISSION_EVENT_COOLDOWN_SEC:-30.0}"
+
+# HRI가 시작되면 person follow 명령을 gate에서 막고 바퀴를 0으로 유지한다.
+HRI_BASE_STOP_ENABLED="${HRI_BASE_STOP_ENABLED:-true}"
+HRI_BASE_STOP_SCRIPT="${HRI_BASE_STOP_SCRIPT:-$ROOT/tools/hri_base_stop_gate.py}"
+HRI_BASE_STOP_STATE_TOPIC="${HRI_BASE_STOP_STATE_TOPIC:-/zeri/hri_base_stop/state}"
+HRI_HOLD_SEC="${HRI_HOLD_SEC:-120.0}"
+HRI_MIN_HOLD_SEC="${HRI_MIN_HOLD_SEC:-5.0}"
+VLM_STATUS_TOPIC="${VLM_STATUS_TOPIC:-/zeri/vlm/inference_status}"
+VLA_STATUS_TOPIC="${VLA_STATUS_TOPIC:-/zeri/vla/status}"
 
 # Optional visualization / mapping
 START_SLAM="${START_SLAM:-true}"
@@ -45,29 +79,37 @@ YOLO_MODEL="${YOLO_MODEL:-yolov8n.pt}"
 YOLO_DEVICE="${YOLO_DEVICE:-cuda:0}"
 USE_VAD_GATE="${USE_VAD_GATE:-false}"
 
-TARGET_DISTANCE_M="${TARGET_DISTANCE_M:-1.00}"
-STOP_DISTANCE_M="${STOP_DISTANCE_M:-0.75}"
-RESUME_DISTANCE_M="${RESUME_DISTANCE_M:-0.95}"
+# 더 가까이 접근하도록 기본 거리 축소.
+# VLM 호출: 0.75m, 실제 정지: 0.58m, 재개: 0.72m.
+TARGET_DISTANCE_M="${TARGET_DISTANCE_M:-0.75}"
+STOP_DISTANCE_M="${STOP_DISTANCE_M:-0.58}"
+RESUME_DISTANCE_M="${RESUME_DISTANCE_M:-0.72}"
 
-FORWARD_SPEED="${FORWARD_SPEED:-0.12}"
-MAX_FORWARD_SPEED="${MAX_FORWARD_SPEED:-0.16}"
+FORWARD_SPEED="${FORWARD_SPEED:-0.10}"
+MAX_FORWARD_SPEED="${MAX_FORWARD_SPEED:-0.14}"
 TURN_KP="${TURN_KP:-0.35}"
 MIN_TURN_SPEED="${MIN_TURN_SPEED:-0.00}"
 MAX_TURN_SPEED="${MAX_TURN_SPEED:-0.32}"
 CENTER_DEADBAND_NORM="${CENTER_DEADBAND_NORM:-0.18}"
 
 # Safety tuning
-FRONT_STOP_M="${FRONT_STOP_M:-0.55}"
-FRONT_SLOW_M="${FRONT_SLOW_M:-0.95}"
-FRONT_EMERGENCY_M="${FRONT_EMERGENCY_M:-0.38}"
+# 가까운 접근용 LiDAR/Depth safety threshold.
+# 너무 작게 잡으면 실제 충돌 여유가 줄어드니 하드웨어 상태 보고 0.05m 단위로 조정한다.
+FRONT_STOP_M="${FRONT_STOP_M:-0.45}"
+FRONT_SLOW_M="${FRONT_SLOW_M:-0.75}"
+FRONT_EMERGENCY_M="${FRONT_EMERGENCY_M:-0.35}"
 STRAFE_SPEED="${STRAFE_SPEED:-0.10}"
-STRAFE_CLEAR_M="${STRAFE_CLEAR_M:-0.75}"
-SIDE_STOP_M="${SIDE_STOP_M:-0.45}"
+STRAFE_CLEAR_M="${STRAFE_CLEAR_M:-0.60}"
+SIDE_STOP_M="${SIDE_STOP_M:-0.35}"
 
 # Base velocity limits
 MAX_LINEAR_X="${MAX_LINEAR_X:-0.18}"
 MAX_LINEAR_Y="${MAX_LINEAR_Y:-0.14}"
 MAX_ANGULAR_Z="${MAX_ANGULAR_Z:-0.45}"
+
+# Safety behavior for this launcher itself.
+# true: child process가 죽으면 전체를 멈춰 반쯤 살아있는 주행 상태를 방지한다.
+DIE_ON_PROCESS_EXIT="${DIE_ON_PROCESS_EXIT:-true}"
 
 PIDS=()
 
@@ -94,11 +136,13 @@ stop_all() {
   echo
   say "STOP requested"
 
-  # 바퀴 정지 명령 먼저 발행
+  # 바퀴 정지 명령 먼저 발행. gate 입력/출력/safety 출력 모두 0으로 밀어준다.
   if command -v ros2 >/dev/null 2>&1; then
-    timeout 2 ros2 topic pub --once "$CMD_OUT_TOPIC" geometry_msgs/msg/Twist \
-      "{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}" \
-      >/dev/null 2>&1 || true
+    for topic in "${PERSON_CMD_TOPIC:-/cmd_vel_follow_raw}" "${CMD_RAW_TOPIC:-/cmd_vel_raw}" "${CMD_OUT_TOPIC:-/cmd_vel}"; do
+      timeout 2 ros2 topic pub --once "$topic" geometry_msgs/msg/Twist \
+        "{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}" \
+        >/dev/null 2>&1 || true
+    done
   fi
 
   for pid in "${PIDS[@]}"; do
@@ -147,6 +191,23 @@ wait_topic() {
   done
 }
 
+wait_topic_or_exit() {
+  local topic="$1"
+  local timeout_sec="${2:-15}"
+  local required="${3:-true}"
+
+  if wait_topic "$topic" "$timeout_sec"; then
+    return 0
+  fi
+
+  if [ "$required" = "true" ]; then
+    say "ERROR required topic not available: $topic"
+    exit 1
+  fi
+
+  return 1
+}
+
 wait_node_bin() {
   local path="$1"
   if [ ! -x "$path" ]; then
@@ -161,10 +222,29 @@ say "LOG_DIR=$LOG_DIR"
 say "ARDUINO_PORT=$ARDUINO_PORT"
 say "LIDAR_PORT=$LIDAR_PORT"
 say "START_CAMERA=$START_CAMERA"
+say "CAMERA_SCRIPT=$CAMERA_SCRIPT"
 say "WAIT_CAMERA_TOPICS=$WAIT_CAMERA_TOPICS"
+say "REQUIRE_CAMERA_TOPICS=$REQUIRE_CAMERA_TOPICS"
 say "RGB_TOPIC=$RGB_TOPIC"
 say "DEPTH_TOPIC=$DEPTH_TOPIC"
 say "POINTS_TOPIC=$POINTS_TOPIC"
+say "CAMERA_INFO_TOPIC=$CAMERA_INFO_TOPIC"
+say "PERSON_CMD_TOPIC=$PERSON_CMD_TOPIC"
+say "CMD_RAW_TOPIC=$CMD_RAW_TOPIC"
+say "CMD_OUT_TOPIC=$CMD_OUT_TOPIC"
+say "MISSION_EVENT_TOPIC=$MISSION_EVENT_TOPIC"
+say "MISSION_EVENT_DISTANCE_M=$MISSION_EVENT_DISTANCE_M"
+say "MISSION_EVENT_STABLE_SEC=$MISSION_EVENT_STABLE_SEC"
+say "MISSION_EVENT_COOLDOWN_SEC=$MISSION_EVENT_COOLDOWN_SEC"
+say "HRI_BASE_STOP_ENABLED=$HRI_BASE_STOP_ENABLED"
+say "HRI_BASE_STOP_STATE_TOPIC=$HRI_BASE_STOP_STATE_TOPIC"
+say "HRI_HOLD_SEC=$HRI_HOLD_SEC"
+say "TARGET_DISTANCE_M=$TARGET_DISTANCE_M"
+say "STOP_DISTANCE_M=$STOP_DISTANCE_M"
+say "RESUME_DISTANCE_M=$RESUME_DISTANCE_M"
+say "FRONT_STOP_M=$FRONT_STOP_M"
+say "FRONT_SLOW_M=$FRONT_SLOW_M"
+say "FRONT_EMERGENCY_M=$FRONT_EMERGENCY_M"
 say "START_SLAM=$START_SLAM"
 say "SLAM_PARAMS_FILE=$SLAM_PARAMS_FILE"
 say "START_OCTOMAP=$START_OCTOMAP"
@@ -184,44 +264,61 @@ if [ ! -f "$ROOT/tools/depth_lidar_safety_guard.py" ]; then
   exit 1
 fi
 
+if [ "$HRI_BASE_STOP_ENABLED" = "true" ] && [ ! -f "$HRI_BASE_STOP_SCRIPT" ]; then
+  say "ERROR missing: $HRI_BASE_STOP_SCRIPT"
+  say "HRI 시작 시 바퀴를 멈추려면 hri_base_stop_gate.py가 필요합니다."
+  exit 1
+fi
+
 # =========================
 # 1. Camera topic precheck
 #    기본값: 이 스크립트에서는 RealSense를 실행하지 않음
 # =========================
 
 if [ "$START_CAMERA" = "true" ]; then
+  if [ ! -x "$CAMERA_SCRIPT" ]; then
+    say "ERROR camera script not found or not executable: $CAMERA_SCRIPT"
+    exit 1
+  fi
+
   SERIAL="$CAMERA_SERIAL" \
-  start_node "01_realsense_pointcloud" \
-    bash "$ROOT/scripts/realsense_pointcloud.sh"
+  RGB_TOPIC="$RGB_TOPIC" \
+  DEPTH_TOPIC="$DEPTH_TOPIC" \
+  POINTCLOUD_TOPIC="$POINTS_TOPIC" \
+  start_node "01_camera_rgbd_pointcloud" \
+    bash "$CAMERA_SCRIPT" "$CAMERA_SERIAL"
 else
   say "SKIP RealSense start"
   say "  camera must be started separately:"
-  say "  SERIAL=$CAMERA_SERIAL bash $ROOT/scripts/realsense_pointcloud.sh"
+  say "  SERIAL=$CAMERA_SERIAL RGB_TOPIC=$RGB_TOPIC DEPTH_TOPIC=$DEPTH_TOPIC POINTCLOUD_TOPIC=$POINTS_TOPIC bash $CAMERA_SCRIPT"
 fi
 
 if [ "$WAIT_CAMERA_TOPICS" = "true" ]; then
-  wait_topic "$RGB_TOPIC" 30 || true
-  wait_topic "$DEPTH_TOPIC" 30 || true
-  wait_topic "$CAMERA_INFO_TOPIC" 10 || true
+  wait_topic_or_exit "$RGB_TOPIC" 30 "$REQUIRE_CAMERA_TOPICS"
+  wait_topic_or_exit "$DEPTH_TOPIC" 30 "$REQUIRE_CAMERA_TOPICS"
+  wait_topic_or_exit "$CAMERA_INFO_TOPIC" 10 "$REQUIRE_CAMERA_TOPICS"
 fi
 
 # PointCloud는 대시보드 3D 뷰용입니다.
-# 외부 카메라 노드가 이미 떠 있으면 파라미터만 보정합니다.
+# camera_rgbd.sh가 /zeri/vlm/pointcloud로 relay한다.
+# raw RealSense node만 떠 있고 public pointcloud가 없으면 wrapper param을 보정한 뒤 한 번 더 기다린다.
 if ! ros2 topic list 2>/dev/null | grep -qx "$POINTS_TOPIC"; then
-  if ros2 node list 2>/dev/null | grep -qx "/camera/camera"; then
-    say "PointCloud topic not found. Trying to enable pointcloud on existing camera node."
-    ros2 param set /camera/camera pointcloud__neon_.stream_filter 2 || true
-    ros2 param set /camera/camera pointcloud__neon_.stream_index_filter 0 || true
-    ros2 param set /camera/camera pointcloud__neon_.allow_no_texture_points false || true
-    ros2 param set /camera/camera pointcloud__neon_.enable true || true
+  if ros2 node list 2>/dev/null | grep -qx "$CAMERA_NODE"; then
+    say "PointCloud topic not found. Trying to enable pointcloud on existing camera node: $CAMERA_NODE"
+    ros2 param set "$CAMERA_NODE" pointcloud__neon_.stream_filter 2 || true
+    ros2 param set "$CAMERA_NODE" pointcloud__neon_.stream_index_filter 0 || true
+    ros2 param set "$CAMERA_NODE" pointcloud__neon_.allow_no_texture_points false || true
+    ros2 param set "$CAMERA_NODE" pointcloud__neon_.enable true || true
     sleep 1
   else
     say "WARN camera node not found. PointCloud topic unavailable: $POINTS_TOPIC"
   fi
 fi
 
+wait_topic_or_exit "$POINTS_TOPIC" 5 "$REQUIRE_POINTCLOUD_TOPIC" || true
+
 say "Current camera topics:"
-ros2 topic list | grep -E "camera|point|points" || true
+ros2 topic list | grep -E "zeri/vlm/input|zeri/vlm/pointcloud|camera_info|camera|point|points" || true
 
 # =========================
 # 2. LiDAR
@@ -267,7 +364,7 @@ start_node "04_scan_front_filter" \
     -p min_angle_deg:=-90.0 \
     -p max_angle_deg:=90.0 \
     -p lidar_yaw_deg:=180.0 \
-    -p min_keep_range:=0.45 \
+    -p min_keep_range:=0.30 \
     -p max_keep_range:=6.0 \
     -p fixed_bins:=720
 
@@ -275,7 +372,8 @@ wait_topic "$SCAN_TOPIC" 10 || true
 
 # =========================
 # 5. YOLO person follow
-#    반드시 /cmd_vel_raw 로만 출력
+#    직접 /cmd_vel_raw로 보내지 말고 /cmd_vel_follow_raw로 보낸다.
+#    HRI stop gate가 이 명령을 받아 /cmd_vel_raw로 pass-through 또는 zero-hold 한다.
 # =========================
 
 start_node "05_person_follow" \
@@ -283,7 +381,7 @@ start_node "05_person_follow" \
     -p rgb_topic:="$RGB_TOPIC" \
     -p depth_topic:="$DEPTH_TOPIC" \
     -p camera_info_topic:="$CAMERA_INFO_TOPIC" \
-    -p cmd_topic:="$CMD_RAW_TOPIC" \
+    -p cmd_topic:="$PERSON_CMD_TOPIC" \
     -p state_topic:="$PERSON_STATE_TOPIC" \
     -p model_path:="$YOLO_MODEL" \
     -p device:="$YOLO_DEVICE" \
@@ -300,7 +398,22 @@ start_node "05_person_follow" \
     -p min_turn_speed:="$MIN_TURN_SPEED" \
     -p max_turn_speed:="$MAX_TURN_SPEED" \
     -p center_deadband_norm:="$CENTER_DEADBAND_NORM" \
-    -p output_topic:="$CMD_RAW_TOPIC"
+    -p output_topic:="$PERSON_CMD_TOPIC"
+
+wait_topic "$PERSON_CMD_TOPIC" 10 || true
+
+# =========================
+# 5a. HRI base stop gate
+#     person_follow raw -> gated raw
+#     HRI/VLM/VLA active 상태에서는 /cmd_vel_raw를 0으로 유지한다.
+# =========================
+
+if [ "$HRI_BASE_STOP_ENABLED" = "true" ]; then
+  start_node "05a_hri_base_stop_gate"     python3 "$HRI_BASE_STOP_SCRIPT" --ros-args       -p input_cmd_topic:="$PERSON_CMD_TOPIC"       -p output_cmd_topic:="$CMD_RAW_TOPIC"       -p mission_event_topic:="$MISSION_EVENT_TOPIC"       -p vlm_status_topic:="$VLM_STATUS_TOPIC"       -p vla_status_topic:="$VLA_STATUS_TOPIC"       -p state_topic:="$HRI_BASE_STOP_STATE_TOPIC"       -p publish_hz:=20.0       -p hri_hold_sec:="$HRI_HOLD_SEC"       -p min_hold_sec:="$HRI_MIN_HOLD_SEC"       -p release_on_terminal_status:=true
+else
+  say "HRI base stop gate disabled. Passing person follow directly to safety guard."
+  PERSON_CMD_TOPIC="$CMD_RAW_TOPIC"
+fi
 
 wait_topic "$CMD_RAW_TOPIC" 10 || true
 
@@ -317,13 +430,13 @@ fi
 start_node "05b_person_arrival_event_bridge" \
   python3 "$ROOT/tools/person_arrival_event_bridge.py" --ros-args \
     -p person_state_topic:="$PERSON_STATE_TOPIC" \
-    -p mission_event_topic:=/zeri/mission/event \
-    -p stop_distance_m:="$STOP_DISTANCE_M" \
-    -p stable_sec:=1.0 \
-    -p cooldown_sec:=30.0 \
+    -p mission_event_topic:="$MISSION_EVENT_TOPIC" \
+    -p stop_distance_m:="$MISSION_EVENT_DISTANCE_M" \
+    -p stable_sec:="$MISSION_EVENT_STABLE_SEC" \
+    -p cooldown_sec:="$MISSION_EVENT_COOLDOWN_SEC" \
     -p source:=person_follow_depth_lidar_drive
 
-wait_topic "/zeri/mission/event" 5 || true
+wait_topic "$MISSION_EVENT_TOPIC" 5 || true
 
 
 # =========================
@@ -357,7 +470,7 @@ start_node "06_depth_lidar_safety_guard" \
     -p side_stop_m:="$SIDE_STOP_M" \
     -p person_stop_distance_m:="$STOP_DISTANCE_M" \
     -p person_resume_distance_m:="$RESUME_DISTANCE_M" \
-    -p person_emergency_distance_m:=0.45
+    -p person_emergency_distance_m:=0.40
 
 wait_topic "$CMD_OUT_TOPIC" 10 || true
 
@@ -437,8 +550,16 @@ say ""
 say "Monitor:"
 say "  ros2 topic echo $SAFETY_STATE_TOPIC"
 say "  ros2 topic echo $PERSON_STATE_TOPIC"
+say "  ros2 topic echo $HRI_BASE_STOP_STATE_TOPIC"
+say "  ros2 topic echo $PERSON_CMD_TOPIC"
 say "  ros2 topic echo $CMD_RAW_TOPIC"
 say "  ros2 topic echo $CMD_OUT_TOPIC"
+say "  ros2 topic echo $MISSION_EVENT_TOPIC"
+say "  # VLM trigger threshold: MISSION_EVENT_DISTANCE_M=$MISSION_EVENT_DISTANCE_M m"
+say "  # Base stop threshold: STOP_DISTANCE_M=$STOP_DISTANCE_M m"
+say "  ros2 topic hz $RGB_TOPIC"
+say "  ros2 topic hz $DEPTH_TOPIC"
+say "  ros2 topic hz $POINTS_TOPIC"
 say "  ros2 topic hz /map"
 say ""
 say "Logs:"
@@ -455,6 +576,10 @@ while true; do
   for pid in "${PIDS[@]}"; do
     if ! kill -0 "$pid" 2>/dev/null; then
       say "WARN process died: pid=$pid"
+      if [ "$DIE_ON_PROCESS_EXIT" = "true" ]; then
+        say "ERROR stopping stack because a child process exited"
+        exit 1
+      fi
     fi
   done
 done
