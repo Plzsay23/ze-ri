@@ -46,6 +46,9 @@ LED_NAME_MAP = {
 SUPPORTED_VLA_TASKS = {
     "oxygen_mask_delivery",
     "radio_delivery",
+    "pick_water_act",
+    "water_delivery",
+    "bottle_delivery",
 }
 
 VALID_TASKS = {
@@ -53,6 +56,9 @@ VALID_TASKS = {
     "status_check",
     "oxygen_mask_delivery",
     "radio_delivery",
+    "pick_water_act",
+    "water_delivery",
+    "bottle_delivery",
     "call_rescue",
 }
 
@@ -80,13 +86,15 @@ SYSTEM_PROMPT = """
 - 실제 VLA 실행은 별도 executor가 수행한다.
 - VLA handoff 확인 단계에서는 손목 카메라 마지막 프레임을 보고 그리퍼 안의 물체가 사라졌는지 판단한다.
 
-현재 사용 가능한 ACT VLA task는 정확히 두 개뿐이다:
+현재 사용 가능한 ACT VLA task는 정확히 세 개다:
 1. oxygen_mask_delivery
    - 산소마스크 전달
 2. radio_delivery
    - 무전기 전달
+3. pick_water_act
+   - 물병/물 전달
 
-이 두 task 외에는 VLA를 실행하면 안 된다.
+이 세 task 외에는 VLA를 실행하면 안 된다.
 그 외 상황은 idle, status_check, call_rescue 중 하나로 판단한다.
 
 상황 판단 기준:
@@ -94,6 +102,7 @@ SYSTEM_PROMPT = """
   "가스 냄새가 난다", "연기 때문에 숨을 못 쉬겠다" 등은 산소마스크 전달 필요.
 - 장면에 사람이 있고 연기/화재/유독가스 위험이 추정되면 산소마스크 전달 필요.
 - 장면이 애매해도 사용자 텍스트가 호흡 곤란이면 산소마스크 전달 필요.
+- "목마르다", "목이 마르다", "물 줘", "물 주세요", "갈증", "마실 것", "수분", "물병" 등은 pick_water_act를 선택한다.
 - "구조대랑 연락", "무전기", "119 불러", "연락해줘", "도와줘", "통신" 등은 무전기 전달 또는 구조대 통신 필요.
 - 사람이 반응하지 않거나, 처치가 불확실하거나, 직접 처치할 수 없는 상황이면 radio_delivery 또는 call_rescue를 선택한다.
 - 일반 대화, 인사, 위험 없음이면 idle.
@@ -112,8 +121,8 @@ LED command rule:
 출력 JSON schema:
 {
   "hazard_level": "normal|caution|urgent|critical|danger",
-  "scene_status": "normal|respiratory_distress|needs_communication|no_response|fire_nearby|smoke_or_gas|blocked_path|unknown",
-  "selected_task": "idle|status_check|oxygen_mask_delivery|radio_delivery|call_rescue",
+  "scene_status": "normal|respiratory_distress|needs_communication|needs_water|no_response|fire_nearby|smoke_or_gas|blocked_path|unknown",
+  "selected_task": "idle|status_check|oxygen_mask_delivery|radio_delivery|pick_water_act|call_rescue",
   "nav_intent": "stop|hold_position|rotate_search|approach_person|follow_voice|retreat|go_to_safe_zone",
   "vla_required": true,
   "vla_instruction": "Deliver the oxygen mask to the person.",
@@ -135,6 +144,10 @@ LED command rule:
   - vla_required = true
   - vla_instruction = "Deliver the radio device to the person."
   - led_cmd = 3 또는 5
+- selected_task가 pick_water_act이면:
+  - vla_required = true
+  - vla_instruction = "Deliver the water bottle to the person."
+  - led_cmd = 2 또는 5
 - selected_task가 idle/status_check/call_rescue이면:
   - vla_required = false
 - nav_intent는 고수준 의도만 출력한다. 속도값이나 cmd_vel은 절대 출력하지 않는다.
@@ -149,7 +162,7 @@ USER_PROMPT_TEMPLATE = """
 현재 카메라 장면과 STT 텍스트를 보고 재난 상황을 판단해라.
 
 이번 단계에서는 ACT 기반 VLA task 실행까지 연동한다.
-단, 실제 실행 가능한 VLA task는 oxygen_mask_delivery, radio_delivery 두 개뿐이다.
+단, 실제 실행 가능한 VLA task는 oxygen_mask_delivery, radio_delivery, pick_water_act 세 개다.
 
 STT 텍스트:
 "{stt_text}"
@@ -264,6 +277,29 @@ def infer_task_from_text(raw_text: str) -> Optional[str]:
         "gas",
     ]
 
+    water_keywords = [
+        "목마",
+        "목이 말",
+        "목 말",
+        "물 줘",
+        "물좀",
+        "물 좀",
+        "물 주세요",
+        "물 필요",
+        "물병",
+        "마실",
+        "마실거",
+        "마실 것",
+        "갈증",
+        "수분",
+        "hydration",
+        "thirst",
+        "thirsty",
+        "water",
+        "bottle",
+        "drink",
+    ]
+
     radio_keywords = [
         "무전",
         "연락",
@@ -281,6 +317,9 @@ def infer_task_from_text(raw_text: str) -> Optional[str]:
 
     if any(keyword in text for keyword in oxygen_keywords):
         return "oxygen_mask_delivery"
+
+    if any(keyword in text for keyword in water_keywords):
+        return "pick_water_act"
 
     if any(keyword in text for keyword in radio_keywords):
         return "radio_delivery"
@@ -303,6 +342,9 @@ def resolve_led_cmd_from_fields(
 
     if task == "radio_delivery":
         return LED_BLUE
+
+    if task in {"pick_water_act", "water_delivery", "bottle_delivery"}:
+        return LED_GREEN
 
     if hazard in {"critical", "danger"}:
         return LED_RED
@@ -331,6 +373,9 @@ def default_instruction_for_task(selected_task: str) -> str:
 
     if selected_task == "radio_delivery":
         return "Deliver the radio device to the person."
+
+    if selected_task in {"pick_water_act", "water_delivery", "bottle_delivery"}:
+        return "Deliver the water bottle to the person."
 
     return ""
 
@@ -378,6 +423,23 @@ def normalize_decision(
                 raw_text=raw_text,
             )
 
+        if fallback_task == "pick_water_act":
+            return VLMDecision(
+                hazard_level="normal",
+                scene_status="needs_water",
+                selected_task="pick_water_act",
+                nav_intent="hold_position",
+                need_oxygen_mask=False,
+                confidence=0.70,
+                led_cmd=LED_GREEN,
+                reason="VLM JSON parsing failed, but STT text indicates thirst or water request.",
+                robot_speech="목이 마르신 것으로 판단했습니다. 물을 전달하겠습니다.",
+                vla_required=True,
+                vla_instruction=default_instruction_for_task("pick_water_act"),
+                task_duration_sec=default_task_duration_sec,
+                raw_text=raw_text,
+            )
+
         return VLMDecision(
             hazard_level="caution",
             scene_status="unknown",
@@ -420,6 +482,11 @@ def normalize_decision(
         hazard_level = "critical"
         need_oxygen_mask = True
 
+    elif inferred_task == "pick_water_act" and selected_task not in SUPPORTED_VLA_TASKS:
+        selected_task = "pick_water_act"
+        scene_status = "needs_water"
+        hazard_level = "normal"
+
     elif inferred_task == "radio_delivery" and selected_task not in SUPPORTED_VLA_TASKS:
         selected_task = "radio_delivery"
         scene_status = "needs_communication"
@@ -440,12 +507,22 @@ def normalize_decision(
         if hazard_level == "normal":
             hazard_level = "urgent"
 
+    elif selected_task in {"pick_water_act", "water_delivery", "bottle_delivery"}:
+        # Thirst/water request is not a hazard by itself, but it is still a valid VLA delivery task.
+        # Force VLA execution even if the model says the scene is "normal".
+        selected_task = "pick_water_act"
+        vla_required = True
+        if scene_status in {"unknown", "normal"}:
+            scene_status = "needs_water"
+        if hazard_level not in {"normal", "caution", "urgent", "critical", "danger"}:
+            hazard_level = "normal"
+
     else:
         vla_required = False
 
-    parsed_vla_required = parsed.get("vla_required", vla_required)
+    # Delivery tasks must execute even if the VLM mistakenly returns vla_required=false.
     if selected_task in SUPPORTED_VLA_TASKS:
-        vla_required = bool(parsed_vla_required)
+        vla_required = True
     else:
         vla_required = False
 
@@ -476,6 +553,8 @@ def normalize_decision(
             robot_speech = "호흡곤란으로 판단했습니다. 산소 마스크 전달을 준비하겠습니다."
         elif selected_task == "radio_delivery":
             robot_speech = "구조대와의 통신이 필요하다고 판단했습니다. 무전기 전달을 준비하겠습니다."
+        elif selected_task in {"pick_water_act", "water_delivery", "bottle_delivery"}:
+            robot_speech = "목이 마르신 것으로 판단했습니다. 물을 전달하겠습니다."
         elif selected_task == "status_check":
             robot_speech = "상황 판단이 불확실합니다. 필요한 도움이 무엇인지 다시 말씀해 주세요."
         elif selected_task == "call_rescue":
