@@ -679,10 +679,12 @@ class QwenVLMRunner:
         dtype_name: str,
         max_new_tokens: int,
         default_task_duration_sec: float,
+        image_max_side: int = 448,
     ):
         self.model_id = model_id
         self.max_new_tokens = max_new_tokens
         self.default_task_duration_sec = default_task_duration_sec
+        self.image_max_side = max(0, int(image_max_side))
 
         if dtype_name == "fp16":
             dtype = torch.float16
@@ -697,7 +699,24 @@ class QwenVLMRunner:
 
         self.processor = AutoProcessor.from_pretrained(model_id)
 
+    def resize_for_vlm(self, image: PILImage.Image) -> PILImage.Image:
+        if self.image_max_side <= 0:
+            return image
+
+        width, height = image.size
+        max_side = max(width, height)
+        if max_side <= self.image_max_side:
+            return image
+
+        scale = self.image_max_side / float(max_side)
+        new_size = (
+            max(1, int(round(width * scale))),
+            max(1, int(round(height * scale))),
+        )
+        return image.resize(new_size, PILImage.Resampling.BICUBIC)
+
     def infer(self, image: PILImage.Image, stt_text: str) -> VLMDecision:
+        image = self.resize_for_vlm(image)
         prompt = USER_PROMPT_TEMPLATE.format(stt_text=stt_text)
 
         messages = [
@@ -775,6 +794,7 @@ def _normalize_handoff_result(parsed: Optional[Dict[str, Any]], raw_text: str) -
 
 
 def _qwen_verify_handoff(self: QwenVLMRunner, image: PILImage.Image, *, selected_task: str, arm: str) -> Dict[str, Any]:
+    image = self.resize_for_vlm(image)
     task_name = "oxygen mask" if selected_task == "oxygen_mask_delivery" else "walkie talkie/radio"
     prompt = f"""
 This is the final wrist-camera frame after a robot VLA handoff motion.
@@ -900,9 +920,10 @@ class ZeriVLMSTTBridgeNode(Node):
         self.declare_parameter("use_vad_gate", False)
         self.declare_parameter("vad_hold_sec", 1.2)
 
-        self.declare_parameter("model_id", "Qwen/Qwen3-VL-8B-Instruct")
+        self.declare_parameter("model_id", "Qwen/Qwen3-VL-4B-Instruct")
         self.declare_parameter("dtype", "bf16")
-        self.declare_parameter("max_new_tokens", 192)
+        self.declare_parameter("max_new_tokens", 96)
+        self.declare_parameter("vlm_image_max_side", 448)
         self.declare_parameter("confidence_threshold", 0.50)
         self.declare_parameter("queue_size", 4)
 
@@ -1014,6 +1035,7 @@ class ZeriVLMSTTBridgeNode(Node):
         model_id = str(self.get_parameter("model_id").value)
         dtype = str(self.get_parameter("dtype").value)
         max_new_tokens = int(self.get_parameter("max_new_tokens").value)
+        vlm_image_max_side = int(self.get_parameter("vlm_image_max_side").value)
         queue_size = int(self.get_parameter("queue_size").value)
         self.confidence_threshold = float(
             self.get_parameter("confidence_threshold").value
@@ -1292,6 +1314,9 @@ class ZeriVLMSTTBridgeNode(Node):
         self.get_logger().info(f"  post_handoff_wait_for_stt_sec: {self.post_handoff_wait_for_stt_sec}")
         self.get_logger().info(f"  post_handoff_speech_on_handoff_pose: {self.post_handoff_speech_on_handoff_pose}")
         self.get_logger().info(f"  home_return_timeout_sec: {self.home_return_timeout_sec}")
+        self.get_logger().info(f"  model_id: {model_id}")
+        self.get_logger().info(f"  max_new_tokens: {max_new_tokens}")
+        self.get_logger().info(f"  vlm_image_max_side: {vlm_image_max_side}")
 
         self.publish_stt_mute(False)
 
@@ -1304,6 +1329,7 @@ class ZeriVLMSTTBridgeNode(Node):
             dtype_name=dtype,
             max_new_tokens=max_new_tokens,
             default_task_duration_sec=self.vla_default_task_duration_sec,
+            image_max_side=vlm_image_max_side,
         )
 
         self.worker = threading.Thread(
