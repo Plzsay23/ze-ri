@@ -120,6 +120,8 @@ class PersonArrivalEventBridge(Node):
         positive_tokens = [
             "arrived",
             "reached",
+            "hold_person",
+            "too_close",
             "stop_for_person",
             "stopped_for_person",
             "hold_position",

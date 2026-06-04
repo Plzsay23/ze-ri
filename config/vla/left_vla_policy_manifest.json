@@ -5,7 +5,13 @@
       "id": "pick_mask_act",
       "policy_type": "act",
       "pretrained_name_or_path": "plzsay/pick_mask_act",
-      "description": "Left-arm ACT policy. Camera key: top."
+      "description": "Left-arm ACT policy: oxygen mask delivery. Camera key: cam_left."
+    },
+    {
+      "id": "pick_bottle_act",
+      "policy_type": "act",
+      "pretrained_name_or_path": "plzsay/pick_bottle_act",
+      "description": "Left-arm ACT policy: water delivery. Camera key: cam_left."
     }
   ]
 }

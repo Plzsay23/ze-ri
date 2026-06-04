@@ -15,7 +15,7 @@ CLEAR_PERSON_MARKERS_ON_START="${CLEAR_PERSON_MARKERS_ON_START:-true}"
 MAX_PERSON_MARKERS="${MAX_PERSON_MARKERS:-50}"
 START_BEHAVIOR_ENGINE="${START_BEHAVIOR_ENGINE:-true}"
 BEHAVIOR_AUTO_APPROACH="${BEHAVIOR_AUTO_APPROACH:-true}"
-BEHAVIOR_APPROACH_DISTANCE_M="${BEHAVIOR_APPROACH_DISTANCE_M:-0.30}"
+BEHAVIOR_APPROACH_DISTANCE_M="${BEHAVIOR_APPROACH_DISTANCE_M:-1.0}"
 BEHAVIOR_PERSON_FRESH_TIMEOUT_SEC="${BEHAVIOR_PERSON_FRESH_TIMEOUT_SEC:-5.0}"
 BEHAVIOR_ARRIVAL_MODE="${BEHAVIOR_ARRIVAL_MODE:-vlm_wait}"
 BEHAVIOR_ARRIVAL_DWELL_SEC="${BEHAVIOR_ARRIVAL_DWELL_SEC:-5.0}"
@@ -199,7 +199,13 @@ start_node "01_yolo_person_mapping_stack" \
     MAX_PERSON_MARKERS="$MAX_PERSON_MARKERS" \
     "$ROOT/scripts/yolo_person_follow_drive.sh"
 
-wait_topic /map 45 || true
+wait_topic /map 45 || {
+  echo "[ERROR] /map is missing. slam_toolbox did not publish a map."
+  echo "        Check:"
+  echo "          ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-unset} ros2 lifecycle get /slam_toolbox"
+  echo "          ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-unset} ros2 topic hz /scan_front"
+  exit 1
+}
 wait_topic /odom 20 || true
 wait_topic /scan_front 20 || true
 wait_topic /zeri/person_markers 20 || true

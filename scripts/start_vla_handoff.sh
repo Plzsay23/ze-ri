@@ -43,6 +43,10 @@ RIGHT_MODEL="${RIGHT_MODEL:-plzsay/pick_wt_act}"
 LEFT_POLICY_ID="${LEFT_POLICY_ID:-pick_mask_act}"
 RIGHT_POLICY_ID="${RIGHT_POLICY_ID:-pick_wt_act}"
 
+# Additional left-arm VLA policy: water delivery
+WATER_MODEL="${WATER_MODEL:-plzsay/pick_bottle_act}"
+WATER_POLICY_ID="${WATER_POLICY_ID:-pick_bottle_act}"
+
 LEFT_ARM_PORT="${LEFT_ARM_PORT:-/dev/follower_left}"
 RIGHT_ARM_PORT="${RIGHT_ARM_PORT:-/dev/follower_right}"
 LEFT_ROBOT_ID="${LEFT_ROBOT_ID:-follower_left}"
@@ -133,7 +137,13 @@ cat > "$LEFT_MANIFEST" <<JSON
       "id": "$LEFT_POLICY_ID",
       "policy_type": "act",
       "pretrained_name_or_path": "$LEFT_MODEL",
-      "description": "Left-arm ACT policy. Camera key: top."
+      "description": "Left-arm ACT policy: oxygen mask delivery. Camera key: cam_left."
+    },
+    {
+      "id": "$WATER_POLICY_ID",
+      "policy_type": "act",
+      "pretrained_name_or_path": "$WATER_MODEL",
+      "description": "Left-arm ACT policy: water delivery. Camera key: cam_left."
     }
   ]
 }
@@ -174,6 +184,27 @@ cat > "$ROUTE_MANIFEST" <<JSON
       "arm": "left",
       "policy_id": "$LEFT_POLICY_ID",
       "task": "Pick up the oxygen mask.",
+      "duration_sec": $RUN_DURATION_SEC,
+      "timeout_sec": $TIMEOUT_SEC
+    },
+    "water_delivery": {
+      "arm": "left",
+      "policy_id": "$WATER_POLICY_ID",
+      "task": "Pick up the water bottle and hold it for handoff.",
+      "duration_sec": $RUN_DURATION_SEC,
+      "timeout_sec": $TIMEOUT_SEC
+    },
+    "bottle_delivery": {
+      "arm": "left",
+      "policy_id": "$WATER_POLICY_ID",
+      "task": "Pick up the water bottle and hold it for handoff.",
+      "duration_sec": $RUN_DURATION_SEC,
+      "timeout_sec": $TIMEOUT_SEC
+    },
+    "pick_water_act": {
+      "arm": "left",
+      "policy_id": "$WATER_POLICY_ID",
+      "task": "Pick up the water bottle and hold it for handoff.",
       "duration_sec": $RUN_DURATION_SEC,
       "timeout_sec": $TIMEOUT_SEC
     },

@@ -47,7 +47,7 @@ class EdgeTTSNode(Node):
         self.declare_parameter("edge_tts_bin", "edge-tts")
         self.declare_parameter("voice", "ko-KR-SunHiNeural")
         self.declare_parameter("rate", "+0%")
-        self.declare_parameter("volume", "+0%")
+        self.declare_parameter("volume", "+80%")
         self.declare_parameter("pitch", "+0Hz")
 
         self.declare_parameter("output_mp3", "/tmp/zeri_tts_output.mp3")

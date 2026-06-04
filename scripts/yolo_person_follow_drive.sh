@@ -48,11 +48,12 @@ CAMERA_ROLL="${CAMERA_ROLL:--1.5708}"
 CAMERA_PITCH="${CAMERA_PITCH:-0.0}"
 CAMERA_YAW="${CAMERA_YAW:--1.5708}"
 
-USE_VAD_GATE="${USE_VAD_GATE:-true}"
+USE_VAD_GATE="${USE_VAD_GATE:-false}"
 MARKER_USE_VAD_GATE="${MARKER_USE_VAD_GATE:-false}"
 START_PERSON_FOLLOW="${START_PERSON_FOLLOW:-true}"
 BASE_DRIVER="${BASE_DRIVER:-key}"
 PERSON_MARKERS_FILE="${PERSON_MARKERS_FILE:-$HOME/ze-ri/data/person_markers.json}"
+CLEAR_PERSON_MARKERS_ON_START="${CLEAR_PERSON_MARKERS_ON_START:-true}"
 MAX_PERSON_MARKERS="${MAX_PERSON_MARKERS:-50}"
 UPDATE_PERSON_MARKERS="${UPDATE_PERSON_MARKERS:-true}"
 PERSON_MARKER_UPDATE_ALPHA="${PERSON_MARKER_UPDATE_ALPHA:-0.35}"
@@ -76,6 +77,10 @@ BASE_MAX_ANGULAR_Z="${BASE_MAX_ANGULAR_Z:-0.70}"
 BASE_ARDUINO_PWM="${BASE_ARDUINO_PWM:-60}"
 VAD_POLL_HZ="${VAD_POLL_HZ:-40.0}"
 VOICE_HOLD_SEC="${VOICE_HOLD_SEC:-3.0}"
+MISSION_EVENT_TOPIC="${MISSION_EVENT_TOPIC:-/zeri/mission/event}"
+ARRIVAL_EVENT_STABLE_SEC="${ARRIVAL_EVENT_STABLE_SEC:-1.0}"
+ARRIVAL_EVENT_COOLDOWN_SEC="${ARRIVAL_EVENT_COOLDOWN_SEC:-30.0}"
+ARRIVAL_SELECTED_PERSON_ID="${ARRIVAL_SELECTED_PERSON_ID:-person_follow_target}"
 
 TARGET_DISTANCE_M="${TARGET_DISTANCE_M:-1.00}"
 DISTANCE_DEADBAND_M="${DISTANCE_DEADBAND_M:-0.18}"
@@ -158,6 +163,39 @@ require_file() {
   fi
 }
 
+wait_slam_active() {
+  local timeout_sec="${1:-30}"
+  local start
+  start=$(date +%s)
+
+  echo "[WAIT] slam_toolbox active"
+
+  while true; do
+    local state
+    state="$(ros2 lifecycle get /slam_toolbox 2>/dev/null || true)"
+
+    if echo "$state" | grep -q "active"; then
+      echo "       OK /slam_toolbox active"
+      return 0
+    fi
+
+    if echo "$state" | grep -q "unconfigured"; then
+      ros2 lifecycle set /slam_toolbox configure >/dev/null 2>&1 || true
+    elif echo "$state" | grep -q "inactive"; then
+      ros2 lifecycle set /slam_toolbox activate >/dev/null 2>&1 || true
+    fi
+
+    local now
+    now=$(date +%s)
+    if [ $((now - start)) -ge "$timeout_sec" ]; then
+      echo "       WARN /slam_toolbox not active after ${timeout_sec}s: ${state:-not found}"
+      return 1
+    fi
+
+    sleep 0.5
+  done
+}
+
 echo "[Ze-Ri YOLO Person Follow Drive]"
 echo "  Camera publisher is NOT started here."
 echo "  Start camera separately:"
@@ -182,6 +220,7 @@ echo "  MARKER_USE_VAD_GATE=$MARKER_USE_VAD_GATE"
 echo "  START_PERSON_FOLLOW=$START_PERSON_FOLLOW"
 echo "  BASE_DRIVER=$BASE_DRIVER"
 echo "  PERSON_MARKERS_FILE=$PERSON_MARKERS_FILE"
+echo "  CLEAR_PERSON_MARKERS_ON_START=$CLEAR_PERSON_MARKERS_ON_START"
 echo "  MAX_PERSON_MARKERS=$MAX_PERSON_MARKERS"
 echo "  UPDATE_PERSON_MARKERS=$UPDATE_PERSON_MARKERS"
 echo "  PERSON_MARKER_UPDATE_ALPHA=$PERSON_MARKER_UPDATE_ALPHA"
@@ -194,6 +233,10 @@ echo "  POINTCLOUD_TOPIC=$POINTCLOUD_TOPIC"
 echo "  BASE_KEY_HZ=$BASE_KEY_HZ"
 echo "  TARGET_DISTANCE_M=$TARGET_DISTANCE_M"
 echo "  CENTER_DEADBAND_NORM=$CENTER_DEADBAND_NORM"
+echo "  MISSION_EVENT_TOPIC=$MISSION_EVENT_TOPIC"
+echo "  ARRIVAL_EVENT_STABLE_SEC=$ARRIVAL_EVENT_STABLE_SEC"
+echo "  ARRIVAL_EVENT_COOLDOWN_SEC=$ARRIVAL_EVENT_COOLDOWN_SEC"
+echo "  ARRIVAL_SELECTED_PERSON_ID=$ARRIVAL_SELECTED_PERSON_ID"
 echo "  LOG_DIR=$LOG_DIR"
 echo "  RVIZ=$START_RVIZ"
 echo
@@ -215,6 +258,13 @@ if [ "$START_PERSON_FOLLOW" = "true" ]; then
 fi
 
 require_file "$HOME/ze-ri/ros2_ws/install/zeri_camera/bin/person_map_marker_node"
+require_file "$HOME/ze-ri/tools/person_arrival_event_bridge.py"
+
+if [ "$CLEAR_PERSON_MARKERS_ON_START" = "true" ]; then
+  mkdir -p "$(dirname "$PERSON_MARKERS_FILE")"
+  rm -f "$PERSON_MARKERS_FILE"
+  echo "[CLEAR] removed previous person markers: $PERSON_MARKERS_FILE"
+fi
 
 sed "s|scan_topic: .*|scan_topic: $SLAM_SCAN_TOPIC|" \
   "$HOME/ze-ri/configs/slam/mapper_params_online_async.yaml" > "$SLAM_PARAMS_FILE"
@@ -315,6 +365,8 @@ start_node "06_slam_toolbox" \
     use_sim_time:=false \
     slam_params_file:="$SLAM_PARAMS_FILE"
 
+wait_slam_active 45 || true
+
 start_node "07_respeaker_vad" \
   "$HOME/ze-ri/ros2_ws/install/zeri_voice/bin/respeaker_vad_doa_node" --ros-args \
     -p poll_hz:="$VAD_POLL_HZ" \
@@ -359,9 +411,20 @@ if [ "$START_PERSON_FOLLOW" = "true" ]; then
       -p min_turn_speed:="$MIN_TURN_SPEED" \
       -p max_turn_speed:="$MAX_TURN_SPEED" \
       -p invert_turn:="$INVERT_TURN"
+
+  start_node "09b_person_arrival_event_bridge" \
+    python3 "$HOME/ze-ri/tools/person_arrival_event_bridge.py" --ros-args \
+      -p person_state_topic:=/zeri/person_follow/state \
+      -p mission_event_topic:="$MISSION_EVENT_TOPIC" \
+      -p stop_distance_m:="$TARGET_DISTANCE_M" \
+      -p stable_sec:="$ARRIVAL_EVENT_STABLE_SEC" \
+      -p cooldown_sec:="$ARRIVAL_EVENT_COOLDOWN_SEC" \
+      -p selected_person_id:="$ARRIVAL_SELECTED_PERSON_ID" \
+      -p source:=yolo_person_follow_drive
 else
   echo "[SKIP] 09_camera_person_follow"
   echo "       Nav2 or another planner may publish /cmd_vel_raw"
+  echo "[SKIP] 09b_person_arrival_event_bridge"
 fi
 
 start_node "10_person_map_marker" \
@@ -413,6 +476,7 @@ echo "[READY] YOLO person-follow drive is running."
 echo
 echo "Check:"
 echo "  ros2 topic echo /zeri/person_follow/state"
+echo "  ros2 topic echo $MISSION_EVENT_TOPIC"
 echo "  ros2 topic echo /zeri/person_markers"
 echo "  ros2 topic hz $POINTCLOUD_TOPIC"
 echo "  ros2 topic echo /zeri/voice_stop_guard/state"

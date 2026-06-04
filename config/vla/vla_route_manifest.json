@@ -21,6 +21,27 @@
       "duration_sec": 20.0,
       "timeout_sec": 60.0
     },
+    "water_delivery": {
+      "arm": "left",
+      "policy_id": "pick_bottle_act",
+      "task": "Pick up the water bottle and hold it for handoff.",
+      "duration_sec": 20.0,
+      "timeout_sec": 60.0
+    },
+    "bottle_delivery": {
+      "arm": "left",
+      "policy_id": "pick_bottle_act",
+      "task": "Pick up the water bottle and hold it for handoff.",
+      "duration_sec": 20.0,
+      "timeout_sec": 60.0
+    },
+    "pick_water_act": {
+      "arm": "left",
+      "policy_id": "pick_bottle_act",
+      "task": "Pick up the water bottle and hold it for handoff.",
+      "duration_sec": 20.0,
+      "timeout_sec": 60.0
+    },
     "radio_delivery": {
       "arm": "right",
       "policy_id": "pick_wt_act",

@@ -46,6 +46,7 @@ LED_NAME_MAP = {
 SUPPORTED_VLA_TASKS = {
     "oxygen_mask_delivery",
     "radio_delivery",
+    "pick_water_act",
 }
 
 VALID_TASKS = {
@@ -53,6 +54,7 @@ VALID_TASKS = {
     "status_check",
     "oxygen_mask_delivery",
     "radio_delivery",
+    "pick_water_act",
     "call_rescue",
 }
 
@@ -80,13 +82,15 @@ SYSTEM_PROMPT = """
 - 실제 VLA 실행은 별도 executor가 수행한다.
 - VLA handoff 확인 단계에서는 손목 카메라 마지막 프레임을 보고 그리퍼 안의 물체가 사라졌는지 판단한다.
 
-현재 사용 가능한 ACT VLA task는 정확히 두 개뿐이다:
+현재 사용 가능한 ACT VLA task는 정확히 세 개다:
 1. oxygen_mask_delivery
    - 산소마스크 전달
 2. radio_delivery
    - 무전기 전달
+3. pick_water_act
+   - 물병/생수 전달
 
-이 두 task 외에는 VLA를 실행하면 안 된다.
+이 세 task 외에는 VLA를 실행하면 안 된다.
 그 외 상황은 idle, status_check, call_rescue 중 하나로 판단한다.
 
 상황 판단 기준:
@@ -95,6 +99,7 @@ SYSTEM_PROMPT = """
 - 장면에 사람이 있고 연기/화재/유독가스 위험이 추정되면 산소마스크 전달 필요.
 - 장면이 애매해도 사용자 텍스트가 호흡 곤란이면 산소마스크 전달 필요.
 - "구조대랑 연락", "무전기", "119 불러", "연락해줘", "도와줘", "통신" 등은 무전기 전달 또는 구조대 통신 필요.
+- "물 줘", "물 좀 줘", "목말라", "마실 것", "생수", "water", "drink", "thirsty" 등은 물 전달 필요.
 - 사람이 반응하지 않거나, 처치가 불확실하거나, 직접 처치할 수 없는 상황이면 radio_delivery 또는 call_rescue를 선택한다.
 - 일반 대화, 인사, 위험 없음이면 idle.
 - 판단이 불확실하면 status_check를 선택하고 추가 질문을 한다.
@@ -113,7 +118,7 @@ LED command rule:
 {
   "hazard_level": "normal|caution|urgent|critical|danger",
   "scene_status": "normal|respiratory_distress|needs_communication|no_response|fire_nearby|smoke_or_gas|blocked_path|unknown",
-  "selected_task": "idle|status_check|oxygen_mask_delivery|radio_delivery|call_rescue",
+  "selected_task": "idle|status_check|oxygen_mask_delivery|radio_delivery|pick_water_act|call_rescue",
   "nav_intent": "stop|hold_position|rotate_search|approach_person|follow_voice|retreat|go_to_safe_zone",
   "vla_required": true,
   "vla_instruction": "Deliver the oxygen mask to the person.",
@@ -135,6 +140,10 @@ LED command rule:
   - vla_required = true
   - vla_instruction = "Deliver the radio device to the person."
   - led_cmd = 3 또는 5
+- selected_task가 pick_water_act이면:
+  - vla_required = true
+  - vla_instruction = "Deliver the water bottle to the person."
+  - led_cmd = 2 또는 5
 - selected_task가 idle/status_check/call_rescue이면:
   - vla_required = false
 - nav_intent는 고수준 의도만 출력한다. 속도값이나 cmd_vel은 절대 출력하지 않는다.
@@ -149,7 +158,7 @@ USER_PROMPT_TEMPLATE = """
 현재 카메라 장면과 STT 텍스트를 보고 재난 상황을 판단해라.
 
 이번 단계에서는 ACT 기반 VLA task 실행까지 연동한다.
-단, 실제 실행 가능한 VLA task는 oxygen_mask_delivery, radio_delivery 두 개뿐이다.
+단, 실제 실행 가능한 VLA task는 oxygen_mask_delivery, radio_delivery, pick_water_act 세 개뿐이다.
 
 STT 텍스트:
 "{stt_text}"
@@ -279,11 +288,33 @@ def infer_task_from_text(raw_text: str) -> Optional[str]:
         "call",
     ]
 
+    water_keywords = [
+        "물",
+        "물좀",
+        "물 좀",
+        "물 줘",
+        "물줘",
+        "물 가져",
+        "물병",
+        "생수",
+        "마실",
+        "음료",
+        "목말",
+        "갈증",
+        "water",
+        "drink",
+        "thirsty",
+        "bottle",
+    ]
+
     if any(keyword in text for keyword in oxygen_keywords):
         return "oxygen_mask_delivery"
 
     if any(keyword in text for keyword in radio_keywords):
         return "radio_delivery"
+
+    if any(keyword in text for keyword in water_keywords):
+        return "pick_water_act"
 
     return None
 
@@ -303,6 +334,9 @@ def resolve_led_cmd_from_fields(
 
     if task == "radio_delivery":
         return LED_BLUE
+
+    if task == "pick_water_act":
+        return LED_GREEN
 
     if hazard in {"critical", "danger"}:
         return LED_RED
@@ -331,6 +365,9 @@ def default_instruction_for_task(selected_task: str) -> str:
 
     if selected_task == "radio_delivery":
         return "Deliver the radio device to the person."
+
+    if selected_task == "pick_water_act":
+        return "Deliver the water bottle to the person."
 
     return ""
 
@@ -374,6 +411,23 @@ def normalize_decision(
                 robot_speech="구조대와의 통신이 필요하다고 판단했습니다. 무전기 전달을 준비하겠습니다.",
                 vla_required=True,
                 vla_instruction=default_instruction_for_task("radio_delivery"),
+                task_duration_sec=default_task_duration_sec,
+                raw_text=raw_text,
+            )
+
+        if fallback_task == "pick_water_act":
+            return VLMDecision(
+                hazard_level="normal",
+                scene_status="normal",
+                selected_task="pick_water_act",
+                nav_intent="hold_position",
+                need_oxygen_mask=False,
+                confidence=0.50,
+                led_cmd=LED_GREEN,
+                reason="VLM JSON parsing failed, but STT text indicates water delivery request.",
+                robot_speech="물을 요청한 것으로 판단했습니다. 물 전달을 준비하겠습니다.",
+                vla_required=True,
+                vla_instruction=default_instruction_for_task("pick_water_act"),
                 task_duration_sec=default_task_duration_sec,
                 raw_text=raw_text,
             )
@@ -425,6 +479,11 @@ def normalize_decision(
         scene_status = "needs_communication"
         hazard_level = "urgent"
 
+    elif inferred_task == "pick_water_act" and selected_task not in SUPPORTED_VLA_TASKS:
+        selected_task = "pick_water_act"
+        scene_status = "normal"
+        hazard_level = "normal"
+
     if selected_task == "oxygen_mask_delivery":
         vla_required = True
         need_oxygen_mask = True
@@ -439,6 +498,11 @@ def normalize_decision(
             scene_status = "needs_communication"
         if hazard_level == "normal":
             hazard_level = "urgent"
+
+    elif selected_task == "pick_water_act":
+        vla_required = True
+        if scene_status == "unknown":
+            scene_status = "normal"
 
     else:
         vla_required = False
@@ -476,6 +540,8 @@ def normalize_decision(
             robot_speech = "호흡곤란으로 판단했습니다. 산소 마스크 전달을 준비하겠습니다."
         elif selected_task == "radio_delivery":
             robot_speech = "구조대와의 통신이 필요하다고 판단했습니다. 무전기 전달을 준비하겠습니다."
+        elif selected_task == "pick_water_act":
+            robot_speech = "물을 요청한 것으로 판단했습니다. 물 전달을 준비하겠습니다."
         elif selected_task == "status_check":
             robot_speech = "상황 판단이 불확실합니다. 필요한 도움이 무엇인지 다시 말씀해 주세요."
         elif selected_task == "call_rescue":
@@ -696,7 +762,14 @@ def _normalize_handoff_result(parsed: Optional[Dict[str, Any]], raw_text: str) -
 
 
 def _qwen_verify_handoff(self: QwenVLMRunner, image: PILImage.Image, *, selected_task: str, arm: str) -> Dict[str, Any]:
-    task_name = "oxygen mask" if selected_task == "oxygen_mask_delivery" else "walkie talkie/radio"
+    if selected_task == "oxygen_mask_delivery":
+        task_name = "oxygen mask"
+    elif selected_task == "radio_delivery":
+        task_name = "walkie talkie/radio"
+    elif selected_task == "pick_water_act":
+        task_name = "water bottle"
+    else:
+        task_name = "object"
     prompt = f"""
 This is the final wrist-camera frame after a robot VLA handoff motion.
 The robot used its {arm} arm to hand over a {task_name}.
@@ -767,14 +840,17 @@ class ZeriVLMSTTBridgeNode(Node):
     def __init__(self):
         super().__init__("zeri_vlm_stt_bridge_node")
 
-        self.declare_parameter("rgb_topic", "/zeri/top/rgb/image_raw")
-        self.declare_parameter("depth_topic", "/zeri/top/depth/image_raw")
+        # Camera input topics. These are published by the external RealSense RGBD node.
+        self.declare_parameter("rgb_topic", "/zeri/vlm/image_rgb")
+        self.declare_parameter("depth_topic", "/zeri/vlm/image_depth")
         self.declare_parameter("stt_topic", "/stt/text")
 
         self.declare_parameter("decision_topic", "/zeri/vlm/decision")
         self.declare_parameter("robot_speech_topic", "/zeri/vlm/robot_speech")
-        self.declare_parameter("vlm_input_rgb_topic", "/zeri/vlm/input_rgb")
-        self.declare_parameter("vlm_input_depth_topic", "/zeri/vlm/input_depth")
+        # Debug-only output topics. Disabled by default to avoid republishing camera input topics.
+        self.declare_parameter("vlm_input_rgb_topic", "/zeri/vlm/debug_input_rgb")
+        self.declare_parameter("vlm_input_depth_topic", "/zeri/vlm/debug_input_depth")
+        self.declare_parameter("publish_vlm_input_snapshots", False)
         self.declare_parameter("inference_status_topic", "/zeri/vlm/inference_status")
         self.declare_parameter("mission_event_topic", "/zeri/mission/event")
         self.declare_parameter("enable_mission_events", True)
@@ -833,6 +909,9 @@ class ZeriVLMSTTBridgeNode(Node):
         self.robot_speech_topic = str(self.get_parameter("robot_speech_topic").value)
         self.vlm_input_rgb_topic = str(self.get_parameter("vlm_input_rgb_topic").value)
         self.vlm_input_depth_topic = str(self.get_parameter("vlm_input_depth_topic").value)
+        self.publish_vlm_input_snapshots = bool(
+            self.get_parameter("publish_vlm_input_snapshots").value
+        )
         self.inference_status_topic = str(self.get_parameter("inference_status_topic").value)
         self.mission_event_topic = str(self.get_parameter("mission_event_topic").value)
         self.enable_mission_events = bool(self.get_parameter("enable_mission_events").value)
@@ -1079,17 +1158,21 @@ class ZeriVLMSTTBridgeNode(Node):
             reliable_qos,
         )
 
-        self.vlm_input_rgb_publisher = self.create_publisher(
-            RosImage,
-            self.vlm_input_rgb_topic,
-            reliable_qos,
-        )
+        if self.publish_vlm_input_snapshots:
+            self.vlm_input_rgb_publisher = self.create_publisher(
+                RosImage,
+                self.vlm_input_rgb_topic,
+                reliable_qos,
+            )
 
-        self.vlm_input_depth_publisher = self.create_publisher(
-            RosImage,
-            self.vlm_input_depth_topic,
-            reliable_qos,
-        )
+            self.vlm_input_depth_publisher = self.create_publisher(
+                RosImage,
+                self.vlm_input_depth_topic,
+                reliable_qos,
+            )
+        else:
+            self.vlm_input_rgb_publisher = None
+            self.vlm_input_depth_publisher = None
 
         self.inference_status_publisher = self.create_publisher(
             String,
@@ -1135,8 +1218,11 @@ class ZeriVLMSTTBridgeNode(Node):
         self.get_logger().info(f"  Robot speech:      {self.robot_speech_topic}")
         self.get_logger().info(f"  LED command:       {self.led_topic}")
         self.get_logger().info(f"  VLA task request:  {self.vla_task_request_topic}")
-        self.get_logger().info(f"  VLM RGB snap:      {self.vlm_input_rgb_topic}")
-        self.get_logger().info(f"  VLM Depth snap:    {self.vlm_input_depth_topic}")
+        if self.publish_vlm_input_snapshots:
+            self.get_logger().info(f"  VLM debug RGB snap:   {self.vlm_input_rgb_topic}")
+            self.get_logger().info(f"  VLM debug Depth snap: {self.vlm_input_depth_topic}")
+        else:
+            self.get_logger().info("  VLM debug RGB/Depth snap: disabled")
         self.get_logger().info(f"  VLM status:        {self.inference_status_topic}")
         self.get_logger().info(f"  STT mute:          {self.stt_mute_topic}")
         self.get_logger().info(f"  Arm home request:  {self.arm_home_request_topic}")
@@ -1968,29 +2054,32 @@ class ZeriVLMSTTBridgeNode(Node):
                     self.release_pipeline_block("rgb_conversion_error")
                     continue
 
-                stamp = self.get_clock().now().to_msg()
+                if self.publish_vlm_input_snapshots:
+                    stamp = self.get_clock().now().to_msg()
 
-                vlm_rgb_msg = pil_rgb_to_ros_image(
-                    image=image,
-                    stamp=stamp,
-                    frame_id="zeri_vlm_input_rgb",
-                )
-
-                self.vlm_input_rgb_publisher.publish(vlm_rgb_msg)
-                self.get_logger().info("Published VLM input RGB snapshot.")
-
-                if depth_msg is not None:
-                    vlm_depth_msg = clone_depth_snapshot_msg(
-                        msg=depth_msg,
+                    vlm_rgb_msg = pil_rgb_to_ros_image(
+                        image=image,
                         stamp=stamp,
-                        frame_id="zeri_vlm_input_depth",
+                        frame_id="zeri_vlm_debug_input_rgb",
                     )
-                    self.vlm_input_depth_publisher.publish(vlm_depth_msg)
-                    self.get_logger().info("Published VLM input Depth snapshot.")
-                else:
-                    self.get_logger().warn(
-                        "No depth frame received yet. Continuing with RGB only."
-                    )
+
+                    if self.vlm_input_rgb_publisher is not None:
+                        self.vlm_input_rgb_publisher.publish(vlm_rgb_msg)
+                        self.get_logger().info("Published VLM debug RGB snapshot.")
+
+                    if depth_msg is not None:
+                        vlm_depth_msg = clone_depth_snapshot_msg(
+                            msg=depth_msg,
+                            stamp=stamp,
+                            frame_id="zeri_vlm_debug_input_depth",
+                        )
+                        if self.vlm_input_depth_publisher is not None:
+                            self.vlm_input_depth_publisher.publish(vlm_depth_msg)
+                            self.get_logger().info("Published VLM debug Depth snapshot.")
+                    else:
+                        self.get_logger().warn(
+                            "No depth frame received yet. Continuing with RGB only."
+                        )
 
                 self.publish_inference_status("running_vlm_inference")
                 self.get_logger().info("Running VLM inference...")
@@ -2062,8 +2151,8 @@ class ZeriVLMSTTBridgeNode(Node):
                     "raw_vlm_output": decision.raw_text,
                     "live_rgb_topic": self.rgb_topic,
                     "live_depth_topic": self.depth_topic,
-                    "vlm_input_rgb_topic": self.vlm_input_rgb_topic,
-                    "vlm_input_depth_topic": self.vlm_input_depth_topic,
+                    "vlm_input_rgb_topic": self.vlm_input_rgb_topic if self.publish_vlm_input_snapshots else None,
+                    "vlm_input_depth_topic": self.vlm_input_depth_topic if self.publish_vlm_input_snapshots else None,
                     "led_topic": self.led_topic,
                     "stt_mute_topic": self.stt_mute_topic,
                     "tts_status_topic": self.tts_status_topic,
