@@ -273,7 +273,7 @@ INDEX_HTML = r"""
       grid-template-rows: minmax(0, 58fr) minmax(0, 42fr);
       grid-template-areas:
         "rgb rgb rgb rgb rgb rgb rgb depth depth depth depth depth depth depth"
-        "map map map voice voice voice leftcam leftcam leftcam rightcam rightcam handoff handoff handoff";
+        "map map map voice voice voice base base base arm arm handoff handoff handoff";
       gap: 10px;
       padding: 10px;
       margin: 0;
@@ -310,8 +310,8 @@ INDEX_HTML = r"""
     .depth-card { grid-area: depth; }
     .text-card { grid-area: voice; }
     .map-card { grid-area: map; }
-    .leftcam-card { grid-area: leftcam; }
-    .rightcam-card { grid-area: rightcam; }
+    .base-card { grid-area: base; }
+    .arm-card { grid-area: arm; }
     .handoff-card { grid-area: handoff; }
 
     .card-title {
@@ -507,7 +507,7 @@ INDEX_HTML = r"""
       flex: 1 1 auto;
       min-height: 0;
       display: grid;
-      grid-template-rows: 1fr;
+      grid-template-rows: minmax(0, 0.9fr) minmax(0, 1.1fr);
       gap: 8px;
       padding: 8px;
       overflow: hidden;
@@ -588,8 +588,8 @@ INDEX_HTML = r"""
         height: auto;
         min-height: calc(100vh - 118px);
         grid-template-columns: 1fr;
-        grid-template-rows: 420px 420px 320px 300px 320px 320px 300px;
-        grid-template-areas: "rgb" "depth" "map" "voice" "leftcam" "rightcam" "handoff";
+        grid-template-rows: 420px 420px 320px 360px 320px 340px 420px;
+        grid-template-areas: "rgb" "depth" "map" "voice" "base" "arm" "handoff";
       }
     }
   </style>
@@ -669,7 +669,7 @@ INDEX_HTML = r"""
 
     <section class="card text-card">
       <div class="card-title">
-        <span>STT / TTS / Model</span>
+        <span>Voice / VLM</span>
         <small id="vlm-ts">대기중</small>
       </div>
       <div class="text-panel">
@@ -682,33 +682,67 @@ INDEX_HTML = r"""
           <div id="robot-speech" class="metric-value">대기중</div>
         </div>
         <div class="metric">
-          <div class="metric-label">실행 모델</div>
-          <div id="executed-model" class="metric-value small">대기중</div>
+          <div class="metric-label">VLM 상태</div>
+          <div id="vlm-status" class="metric-value small">대기중</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">VLM 판단값</div>
+          <div id="vlm-output" class="metric-value small">대기중</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">판단 근거</div>
+          <div id="vlm-reason" class="metric-value small">대기중</div>
         </div>
       </div>
     </section>
 
-    <section class="card leftcam-card">
+    <section class="card base-card">
       <div class="card-title">
-        <span>Left Arm Camera</span>
-        <small id="leftcam-ts">대기중</small>
+        <span>Autonomy / Safety</span>
+        <small id="base-ts">대기중</small>
       </div>
-      <div class="media-wrap">
-        <img id="left-arm-camera-img" alt="Left Arm Camera" style="display:none" />
-        <div id="left-arm-camera-placeholder" class="placeholder">왼팔 카메라 데이터 대기중</div>
-        <div class="overlay-pill">/zeri/vla/left/handoff_image</div>
+      <div class="status-big">
+        <div class="status-line">
+          <div class="label">Person Follow</div>
+          <div id="person-follow-state" class="value">데이터 대기중</div>
+        </div>
+        <div class="status-line">
+          <div class="label">LiDAR + Depth Safety Guard</div>
+          <div id="safety-guard-state" class="value">데이터 대기중</div>
+        </div>
+        <div class="status-line">
+          <div class="label">cmd_vel_raw → cmd_vel</div>
+          <div id="cmd-state" class="value">데이터 대기중</div>
+        </div>
+        <div class="status-line">
+          <div class="label">Scan / Odom</div>
+          <div id="nav-state" class="value">데이터 대기중</div>
+        </div>
       </div>
     </section>
 
-    <section class="card rightcam-card">
+    <section class="card arm-card">
       <div class="card-title">
-        <span>Right Arm Camera</span>
-        <small id="rightcam-ts">대기중</small>
+        <span>VLA / Robot Arms</span>
+        <small id="arm-ts">대기중</small>
       </div>
-      <div class="media-wrap">
-        <img id="right-arm-camera-img" alt="Right Arm Camera" style="display:none" />
-        <div id="right-arm-camera-placeholder" class="placeholder">오른팔 카메라 데이터 대기중</div>
-        <div class="overlay-pill">/zeri/vla/right/handoff_image</div>
+      <div class="status-big">
+        <div class="status-line">
+          <div class="label">VLA Router</div>
+          <div id="vla-status" class="value">데이터 대기중</div>
+        </div>
+        <div class="status-line">
+          <div class="label">Left Arm</div>
+          <div id="vla-left-status" class="value">데이터 대기중</div>
+        </div>
+        <div class="status-line">
+          <div class="label">Right Arm</div>
+          <div id="vla-right-status" class="value">데이터 대기중</div>
+        </div>
+        <div class="status-line">
+          <div class="label">Last Task Request / Legacy Arm Status</div>
+          <div id="arm-status" class="value">데이터 대기중</div>
+        </div>
       </div>
     </section>
 
@@ -718,6 +752,18 @@ INDEX_HTML = r"""
         <small id="handoff-ts">대기중</small>
       </div>
       <div class="handoff-panel">
+        <div class="handoff-images">
+          <div class="handoff-thumb">
+            <img id="handoff-left-img" alt="Left handoff image" style="display:none" />
+            <div id="handoff-left-placeholder" class="placeholder">LEFT handoff_image 대기중</div>
+            <div class="handoff-thumb-label">LEFT WRIST</div>
+          </div>
+          <div class="handoff-thumb">
+            <img id="handoff-right-img" alt="Right handoff image" style="display:none" />
+            <div id="handoff-right-placeholder" class="placeholder">RIGHT handoff_image 대기중</div>
+            <div class="handoff-thumb-label">RIGHT WRIST</div>
+          </div>
+        </div>
         <div class="handoff-statuses">
           <div class="status-line">
             <div class="label">Handoff Supervisor</div>
@@ -1097,38 +1143,77 @@ INDEX_HTML = r"""
       setImg("rgb-img", "rgb-placeholder", data.rgb_image);
       updatePointCloudViewer(data.point_cloud);
       setImg("map-img", "map-placeholder", data.map_image);
-      setImg("left-arm-camera-img", "left-arm-camera-placeholder", data.left_handoff_image);
-      setImg("right-arm-camera-img", "right-arm-camera-placeholder", data.right_handoff_image);
+      setImg("handoff-left-img", "handoff-left-placeholder", data.left_handoff_image);
+      setImg("handoff-right-img", "handoff-right-placeholder", data.right_handoff_image);
 
       $("rgb-ts").textContent = fmtTs(data.timestamps?.rgb, data.counts?.rgb);
       $("depth-ts").textContent = fmtTs(data.timestamps?.pointcloud, data.counts?.pointcloud);
       $("map-ts").textContent = fmtTs(data.timestamps?.map, data.counts?.map);
       $("vlm-ts").textContent = fmtTs(data.timestamps?.vlm || data.timestamps?.stt);
-      $("leftcam-ts").textContent = fmtTs(data.timestamps?.left_handoff_image);
-      $("rightcam-ts").textContent = fmtTs(data.timestamps?.right_handoff_image);
+      $("base-ts").textContent = fmtTs(
+        data.timestamps?.safety || data.timestamps?.person || data.timestamps?.cmd_out || data.timestamps?.base
+      );
+      $("arm-ts").textContent = fmtTs(
+        data.timestamps?.vla || data.timestamps?.vla_left || data.timestamps?.vla_right || data.timestamps?.arm
+      );
       $("handoff-ts").textContent = fmtTs(
         Math.max(
           data.timestamps?.handoff || 0,
           data.timestamps?.yolo_left || 0,
-          data.timestamps?.yolo_right || 0
+          data.timestamps?.yolo_right || 0,
+          data.timestamps?.left_handoff_image || 0,
+          data.timestamps?.right_handoff_image || 0
         )
       );
 
+      $("stt-text").textContent = safeText(data.stt_text);
+      $("robot-speech").textContent = safeText(data.robot_speech || data.vlm_decision?.robot_speech);
+      $("vlm-status").textContent = safeText(data.inference_status);
+
       const d = data.vlm_decision || {};
+      const vlmLines = [
+        `need_oxygen_mask: ${safeText(d.need_oxygen_mask, "-")}`,
+        `selected_task: ${safeText(d.selected_task, "-")}`,
+        `adapter_id: ${safeText(d.adapter_id, "-")}`,
+        `confidence: ${safeText(d.confidence, "-")}`,
+        `mock_action: ${safeText(d.mock_action, "-")}`,
+        `latency_sec: ${safeText(d.latency_sec, "-")}`,
+        `camera_age_sec: ${safeText(d.camera_age_sec, "-")}`,
+        `latest_vad: ${safeText(d.latest_vad, "-")}`,
+        `use_vad_gate: ${safeText(d.use_vad_gate, "-")}`,
+        `doa_deg: ${safeText(d.doa_deg, "-")}`,
+        `doa_age_sec: ${safeText(d.doa_age_sec, "-")}`,
+        `live_rgb_topic: ${safeText(d.live_rgb_topic, "-")}`,
+        `live_depth_topic: ${safeText(d.live_depth_topic, "-")}`,
+        `vlm_rgb_snapshot: ${safeText(d.vlm_input_rgb_topic, "-")}`,
+        `vlm_depth_snapshot: ${safeText(d.vlm_input_depth_topic, "-")}`
+      ];
 
-      $("stt-text").textContent = safeText(data.stt_text || d.stt_text);
-      $("robot-speech").textContent = safeText(data.robot_speech || d.robot_speech);
+      $("vlm-output").textContent = vlmLines.join("\n");
+      $("vlm-reason").textContent = safeText(d.reason);
 
-      const executedModel =
-        d.executed_model ||
-        d.model ||
-        d.policy_id ||
-        d.adapter_id ||
-        d.selected_task ||
-        data.vla_task_request ||
-        data.vla_status ||
-        "대기중";
-      $("executed-model").textContent = safeText(executedModel);
+      const cmdLines = [
+        "RAW  " + safeText(data.cmd_raw, "-"),
+        "OUT  " + safeText(data.cmd_out, "-"),
+      ];
+      const navLines = [
+        "SCAN " + safeText(data.scan_state, "-"),
+        "ODOM " + safeText(data.odom_state, "-"),
+        "LEGACY " + safeText(data.base_status, "-"),
+      ];
+
+      $("person-follow-state").textContent = safeText(data.person_follow_state);
+      $("safety-guard-state").textContent = safeText(data.safety_guard_state);
+      $("cmd-state").textContent = cmdLines.join("\n");
+      $("nav-state").textContent = navLines.join("\n");
+
+      $("vla-status").textContent = safeText(data.vla_status);
+      $("vla-left-status").textContent = safeText(data.vla_left_status);
+      $("vla-right-status").textContent = safeText(data.vla_right_status);
+      $("arm-status").textContent = [
+        "TASK_REQUEST " + safeText(data.vla_task_request, "-"),
+        "LEGACY " + safeText(data.arm_status, "-"),
+      ].join("\n");
 
       $("handoff-status").textContent = safeText(data.handoff_status);
       $("yolo-left-status").textContent = safeText(data.yolo_left_status);

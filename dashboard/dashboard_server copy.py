@@ -273,7 +273,7 @@ INDEX_HTML = r"""
       grid-template-rows: minmax(0, 58fr) minmax(0, 42fr);
       grid-template-areas:
         "rgb rgb rgb rgb rgb rgb rgb depth depth depth depth depth depth depth"
-        "map map map voice voice voice leftcam leftcam leftcam rightcam rightcam handoff handoff handoff";
+        "map map map voice voice voice voice base base base arm arm arm arm";
       gap: 10px;
       padding: 10px;
       margin: 0;
@@ -310,9 +310,8 @@ INDEX_HTML = r"""
     .depth-card { grid-area: depth; }
     .text-card { grid-area: voice; }
     .map-card { grid-area: map; }
-    .leftcam-card { grid-area: leftcam; }
-    .rightcam-card { grid-area: rightcam; }
-    .handoff-card { grid-area: handoff; }
+    .base-card { grid-area: base; }
+    .arm-card { grid-area: arm; }
 
     .card-title {
       height: 38px;
@@ -501,68 +500,6 @@ INDEX_HTML = r"""
       align-content: start;
     }
 
-
-
-    .handoff-panel {
-      flex: 1 1 auto;
-      min-height: 0;
-      display: grid;
-      grid-template-rows: 1fr;
-      gap: 8px;
-      padding: 8px;
-      overflow: hidden;
-      background: rgba(2, 6, 23, 0.18);
-    }
-
-    .handoff-images {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-      min-height: 0;
-    }
-
-    .handoff-thumb {
-      position: relative;
-      min-width: 0;
-      min-height: 0;
-      overflow: hidden;
-      border-radius: 10px;
-      border: 1px solid rgba(96, 165, 250, 0.24);
-      background: #020617;
-    }
-
-    .handoff-thumb img {
-      width: 100%;
-      height: 100%;
-      display: block;
-      object-fit: cover;
-      background: #020617;
-    }
-
-    .handoff-thumb .placeholder {
-      font-size: 12px;
-      font-weight: 900;
-    }
-
-    .handoff-thumb-label {
-      position: absolute;
-      left: 8px;
-      top: 8px;
-      padding: 4px 7px;
-      border-radius: 999px;
-      background: rgba(2, 6, 23, 0.72);
-      color: #bfdbfe;
-      font-size: 9px;
-      font-weight: 950;
-      border: 1px solid rgba(96, 165, 250, 0.28);
-      backdrop-filter: blur(8px);
-    }
-
-    .handoff-statuses {
-      min-height: 0;
-      overflow: auto;
-    }
-
     @media (max-width: 1280px) {
       body { overflow-y: auto; }
       .topbar {
@@ -588,8 +525,8 @@ INDEX_HTML = r"""
         height: auto;
         min-height: calc(100vh - 118px);
         grid-template-columns: 1fr;
-        grid-template-rows: 420px 420px 320px 300px 320px 320px 300px;
-        grid-template-areas: "rgb" "depth" "map" "voice" "leftcam" "rightcam" "handoff";
+        grid-template-rows: 420px 420px 320px 360px 320px 340px;
+        grid-template-areas: "rgb" "depth" "map" "voice" "base" "arm";
       }
     }
   </style>
@@ -609,7 +546,6 @@ INDEX_HTML = r"""
       <div id="chip-map" class="status-chip bad"><span class="chip-dot"></span><span>SLAM</span><b>WAIT</b></div>
       <div id="chip-base" class="status-chip bad"><span class="chip-dot"></span><span>BASE</span><b>WAIT</b></div>
       <div id="chip-vla" class="status-chip bad"><span class="chip-dot"></span><span>VLA</span><b>WAIT</b></div>
-      <div id="chip-handoff" class="status-chip bad"><span class="chip-dot"></span><span>HANDOFF</span><b>WAIT</b></div>
       <div id="clock" class="clock">-</div>
     </div>
   </header>
@@ -637,7 +573,7 @@ INDEX_HTML = r"""
       <div class="media-wrap">
         <img id="rgb-img" alt="RGB Stream" style="display:none" />
         <div id="rgb-placeholder" class="placeholder">RGB 데이터 대기중</div>
-        <div id="rgb-overlay" class="overlay-pill">/zeri/vlm/input_rgb</div>
+        <div id="rgb-overlay" class="overlay-pill">camera/color/image_raw</div>
       </div>
     </section>
 
@@ -669,7 +605,7 @@ INDEX_HTML = r"""
 
     <section class="card text-card">
       <div class="card-title">
-        <span>STT / TTS / Model</span>
+        <span>Voice / VLM</span>
         <small id="vlm-ts">대기중</small>
       </div>
       <div class="text-panel">
@@ -682,55 +618,66 @@ INDEX_HTML = r"""
           <div id="robot-speech" class="metric-value">대기중</div>
         </div>
         <div class="metric">
-          <div class="metric-label">실행 모델</div>
-          <div id="executed-model" class="metric-value small">대기중</div>
+          <div class="metric-label">VLM 상태</div>
+          <div id="vlm-status" class="metric-value small">대기중</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">VLM 판단값</div>
+          <div id="vlm-output" class="metric-value small">대기중</div>
+        </div>
+        <div class="metric">
+          <div class="metric-label">판단 근거</div>
+          <div id="vlm-reason" class="metric-value small">대기중</div>
         </div>
       </div>
     </section>
 
-    <section class="card leftcam-card">
+    <section class="card base-card">
       <div class="card-title">
-        <span>Left Arm Camera</span>
-        <small id="leftcam-ts">대기중</small>
+        <span>Autonomy / Safety</span>
+        <small id="base-ts">대기중</small>
       </div>
-      <div class="media-wrap">
-        <img id="left-arm-camera-img" alt="Left Arm Camera" style="display:none" />
-        <div id="left-arm-camera-placeholder" class="placeholder">왼팔 카메라 데이터 대기중</div>
-        <div class="overlay-pill">/zeri/vla/left/handoff_image</div>
+      <div class="status-big">
+        <div class="status-line">
+          <div class="label">Person Follow</div>
+          <div id="person-follow-state" class="value">데이터 대기중</div>
+        </div>
+        <div class="status-line">
+          <div class="label">LiDAR + Depth Safety Guard</div>
+          <div id="safety-guard-state" class="value">데이터 대기중</div>
+        </div>
+        <div class="status-line">
+          <div class="label">cmd_vel_raw → cmd_vel</div>
+          <div id="cmd-state" class="value">데이터 대기중</div>
+        </div>
+        <div class="status-line">
+          <div class="label">Scan / Odom</div>
+          <div id="nav-state" class="value">데이터 대기중</div>
+        </div>
       </div>
     </section>
 
-    <section class="card rightcam-card">
+    <section class="card arm-card">
       <div class="card-title">
-        <span>Right Arm Camera</span>
-        <small id="rightcam-ts">대기중</small>
+        <span>VLA / Robot Arms</span>
+        <small id="arm-ts">대기중</small>
       </div>
-      <div class="media-wrap">
-        <img id="right-arm-camera-img" alt="Right Arm Camera" style="display:none" />
-        <div id="right-arm-camera-placeholder" class="placeholder">오른팔 카메라 데이터 대기중</div>
-        <div class="overlay-pill">/zeri/vla/right/handoff_image</div>
-      </div>
-    </section>
-
-    <section class="card handoff-card">
-      <div class="card-title">
-        <span>YOLO / Handoff</span>
-        <small id="handoff-ts">대기중</small>
-      </div>
-      <div class="handoff-panel">
-        <div class="handoff-statuses">
-          <div class="status-line">
-            <div class="label">Handoff Supervisor</div>
-            <div id="handoff-status" class="value">데이터 대기중</div>
-          </div>
-          <div class="status-line">
-            <div class="label">YOLO Left Auto-Release</div>
-            <div id="yolo-left-status" class="value">데이터 대기중</div>
-          </div>
-          <div class="status-line">
-            <div class="label">YOLO Right Auto-Release</div>
-            <div id="yolo-right-status" class="value">데이터 대기중</div>
-          </div>
+      <div class="status-big">
+        <div class="status-line">
+          <div class="label">VLA Router</div>
+          <div id="vla-status" class="value">데이터 대기중</div>
+        </div>
+        <div class="status-line">
+          <div class="label">Left Arm</div>
+          <div id="vla-left-status" class="value">데이터 대기중</div>
+        </div>
+        <div class="status-line">
+          <div class="label">Right Arm</div>
+          <div id="vla-right-status" class="value">데이터 대기중</div>
+        </div>
+        <div class="status-line">
+          <div class="label">Last Task Request / Legacy Arm Status</div>
+          <div id="arm-status" class="value">데이터 대기중</div>
         </div>
       </div>
     </section>
@@ -837,15 +784,12 @@ INDEX_HTML = r"""
       const mapOk = isFresh(ts.map, 8);
       const baseOk = isFresh(ts.safety, 3) || isFresh(ts.person, 3) || isFresh(ts.cmd_out, 3) || isFresh(ts.odom, 3);
       const vlaOk = isFresh(ts.vla, 5) || isFresh(ts.vla_left, 5) || isFresh(ts.vla_right, 5);
-      const handoffLatest = Math.max(ts.handoff || 0, ts.yolo_left || 0, ts.yolo_right || 0, ts.left_handoff_image || 0, ts.right_handoff_image || 0);
-      const handoffOk = isFresh(handoffLatest, 5);
 
       setChip("chip-rgb", rgbOk ? "ok" : "bad", rgbOk ? shortAge(ts.rgb) : "WAIT");
       setChip("chip-pc", pcOk ? "ok" : "bad", pcOk ? shortAge(ts.pointcloud) : "WAIT");
       setChip("chip-map", mapOk ? "ok" : "warn", mapOk ? shortAge(ts.map) : "WAIT");
       setChip("chip-base", baseOk ? "ok" : "warn", baseOk ? shortAge(Math.max(ts.safety || 0, ts.person || 0, ts.cmd_out || 0, ts.odom || 0)) : "WAIT");
       setChip("chip-vla", vlaOk ? "ok" : "warn", vlaOk ? shortAge(Math.max(ts.vla || 0, ts.vla_left || 0, ts.vla_right || 0)) : "WAIT");
-      setChip("chip-handoff", handoffOk ? "ok" : "warn", handoffOk ? shortAge(handoffLatest) : "WAIT");
 
       const [mission, desc] = inferMissionState(data);
       $("mission-state").textContent = mission;
@@ -859,7 +803,7 @@ INDEX_HTML = r"""
       $("pc-count").textContent = pcCount.toLocaleString();
       $("pc-overlay").textContent = `${pcCount.toLocaleString()} points`;
 
-      const lastTs = Math.max(ts.rgb || 0, ts.pointcloud || 0, ts.map || 0, ts.vlm || 0, ts.safety || 0, ts.vla || 0, handoffLatest || 0);
+      const lastTs = Math.max(ts.rgb || 0, ts.pointcloud || 0, ts.map || 0, ts.vlm || 0, ts.safety || 0, ts.vla || 0);
       $("last-update").textContent = shortAge(lastTs);
     }
 
@@ -1097,42 +1041,66 @@ INDEX_HTML = r"""
       setImg("rgb-img", "rgb-placeholder", data.rgb_image);
       updatePointCloudViewer(data.point_cloud);
       setImg("map-img", "map-placeholder", data.map_image);
-      setImg("left-arm-camera-img", "left-arm-camera-placeholder", data.left_handoff_image);
-      setImg("right-arm-camera-img", "right-arm-camera-placeholder", data.right_handoff_image);
 
       $("rgb-ts").textContent = fmtTs(data.timestamps?.rgb, data.counts?.rgb);
       $("depth-ts").textContent = fmtTs(data.timestamps?.pointcloud, data.counts?.pointcloud);
       $("map-ts").textContent = fmtTs(data.timestamps?.map, data.counts?.map);
       $("vlm-ts").textContent = fmtTs(data.timestamps?.vlm || data.timestamps?.stt);
-      $("leftcam-ts").textContent = fmtTs(data.timestamps?.left_handoff_image);
-      $("rightcam-ts").textContent = fmtTs(data.timestamps?.right_handoff_image);
-      $("handoff-ts").textContent = fmtTs(
-        Math.max(
-          data.timestamps?.handoff || 0,
-          data.timestamps?.yolo_left || 0,
-          data.timestamps?.yolo_right || 0
-        )
+      $("base-ts").textContent = fmtTs(
+        data.timestamps?.safety || data.timestamps?.person || data.timestamps?.cmd_out || data.timestamps?.base
+      );
+      $("arm-ts").textContent = fmtTs(
+        data.timestamps?.vla || data.timestamps?.vla_left || data.timestamps?.vla_right || data.timestamps?.arm
       );
 
+      $("stt-text").textContent = safeText(data.stt_text);
+      $("robot-speech").textContent = safeText(data.robot_speech || data.vlm_decision?.robot_speech);
+      $("vlm-status").textContent = safeText(data.inference_status);
+
       const d = data.vlm_decision || {};
+      const vlmLines = [
+        `need_oxygen_mask: ${safeText(d.need_oxygen_mask, "-")}`,
+        `selected_task: ${safeText(d.selected_task, "-")}`,
+        `adapter_id: ${safeText(d.adapter_id, "-")}`,
+        `confidence: ${safeText(d.confidence, "-")}`,
+        `mock_action: ${safeText(d.mock_action, "-")}`,
+        `latency_sec: ${safeText(d.latency_sec, "-")}`,
+        `camera_age_sec: ${safeText(d.camera_age_sec, "-")}`,
+        `latest_vad: ${safeText(d.latest_vad, "-")}`,
+        `use_vad_gate: ${safeText(d.use_vad_gate, "-")}`,
+        `doa_deg: ${safeText(d.doa_deg, "-")}`,
+        `doa_age_sec: ${safeText(d.doa_age_sec, "-")}`,
+        `live_rgb_topic: ${safeText(d.live_rgb_topic, "-")}`,
+        `live_depth_topic: ${safeText(d.live_depth_topic, "-")}`,
+        `vlm_rgb_snapshot: ${safeText(d.vlm_input_rgb_topic, "-")}`,
+        `vlm_depth_snapshot: ${safeText(d.vlm_input_depth_topic, "-")}`
+      ];
 
-      $("stt-text").textContent = safeText(data.stt_text || d.stt_text);
-      $("robot-speech").textContent = safeText(data.robot_speech || d.robot_speech);
+      $("vlm-output").textContent = vlmLines.join("\n");
+      $("vlm-reason").textContent = safeText(d.reason);
 
-      const executedModel =
-        d.executed_model ||
-        d.model ||
-        d.policy_id ||
-        d.adapter_id ||
-        d.selected_task ||
-        data.vla_task_request ||
-        data.vla_status ||
-        "대기중";
-      $("executed-model").textContent = safeText(executedModel);
+      const cmdLines = [
+        "RAW  " + safeText(data.cmd_raw, "-"),
+        "OUT  " + safeText(data.cmd_out, "-"),
+      ];
+      const navLines = [
+        "SCAN " + safeText(data.scan_state, "-"),
+        "ODOM " + safeText(data.odom_state, "-"),
+        "LEGACY " + safeText(data.base_status, "-"),
+      ];
 
-      $("handoff-status").textContent = safeText(data.handoff_status);
-      $("yolo-left-status").textContent = safeText(data.yolo_left_status);
-      $("yolo-right-status").textContent = safeText(data.yolo_right_status);
+      $("person-follow-state").textContent = safeText(data.person_follow_state);
+      $("safety-guard-state").textContent = safeText(data.safety_guard_state);
+      $("cmd-state").textContent = cmdLines.join("\n");
+      $("nav-state").textContent = navLines.join("\n");
+
+      $("vla-status").textContent = safeText(data.vla_status);
+      $("vla-left-status").textContent = safeText(data.vla_left_status);
+      $("vla-right-status").textContent = safeText(data.vla_right_status);
+      $("arm-status").textContent = [
+        "TASK_REQUEST " + safeText(data.vla_task_request, "-"),
+        "LEGACY " + safeText(data.arm_status, "-"),
+      ].join("\n");
 
       updateMissionAndChips(data);
     }
@@ -1202,11 +1170,6 @@ class SharedState:
             "vla_left_status": "데이터 대기중",
             "vla_right_status": "데이터 대기중",
             "vla_task_request": "데이터 대기중",
-            "left_handoff_image": None,
-            "right_handoff_image": None,
-            "handoff_status": "데이터 대기중",
-            "yolo_left_status": "데이터 대기중",
-            "yolo_right_status": "데이터 대기중",
             "timestamps": {},
             "counts": {
                 "rgb": 0,
@@ -1589,11 +1552,6 @@ class ZeriDashboardNode(Node):
         self.create_subscription(String, args.vla_left_status_topic, self.vla_left_status_callback, text_qos)
         self.create_subscription(String, args.vla_right_status_topic, self.vla_right_status_callback, text_qos)
         self.create_subscription(String, args.vla_task_request_topic, self.vla_task_request_callback, text_qos)
-        self.create_subscription(Image, args.left_handoff_image_topic, self.left_handoff_image_callback, image_qos)
-        self.create_subscription(Image, args.right_handoff_image_topic, self.right_handoff_image_callback, image_qos)
-        self.create_subscription(String, args.handoff_status_topic, self.handoff_status_callback, text_qos)
-        self.create_subscription(String, args.yolo_left_status_topic, self.yolo_left_status_callback, text_qos)
-        self.create_subscription(String, args.yolo_right_status_topic, self.yolo_right_status_callback, text_qos)
 
         self.get_logger().info("Ze-Ri Dashboard subscriptions:")
         self.get_logger().info(f"  RGB:              {args.rgb_topic}")
@@ -1612,9 +1570,6 @@ class ZeriDashboardNode(Node):
         self.get_logger().info(f"  VLA status:       {args.vla_status_topic}")
         self.get_logger().info(f"  VLA left/right:   {args.vla_left_status_topic} / {args.vla_right_status_topic}")
         self.get_logger().info(f"  VLA request:      {args.vla_task_request_topic}")
-        self.get_logger().info(f"  Handoff images:   {args.left_handoff_image_topic} / {args.right_handoff_image_topic}")
-        self.get_logger().info(f"  Handoff status:   {args.handoff_status_topic}")
-        self.get_logger().info(f"  YOLO left/right:  {args.yolo_left_status_topic} / {args.yolo_right_status_topic}")
         self.get_logger().info(f"  Image QoS:        {args.image_qos}")
 
         self.mock_start_time = time.time()
@@ -1730,42 +1685,6 @@ class ZeriDashboardNode(Node):
         STATE.update(vla_task_request=pretty_json_string_or_raw(msg.data))
         STATE.update_timestamp("vla")
 
-
-
-    def _handoff_image_callback(self, msg: Image, *, side: str) -> None:
-        bgr = image_msg_to_bgr(msg)
-        data_url = encode_image_to_data_url(
-            bgr,
-            ext=".jpg",
-            quality=self.args.jpeg_quality,
-        )
-        if not data_url:
-            return
-        if side == "left":
-            STATE.update(left_handoff_image=data_url)
-            STATE.update_timestamp("left_handoff_image")
-        else:
-            STATE.update(right_handoff_image=data_url)
-            STATE.update_timestamp("right_handoff_image")
-
-    def left_handoff_image_callback(self, msg: Image) -> None:
-        self._handoff_image_callback(msg, side="left")
-
-    def right_handoff_image_callback(self, msg: Image) -> None:
-        self._handoff_image_callback(msg, side="right")
-
-    def handoff_status_callback(self, msg: String) -> None:
-        STATE.update(handoff_status=pretty_json_string_or_raw(msg.data))
-        STATE.update_timestamp("handoff")
-
-    def yolo_left_status_callback(self, msg: String) -> None:
-        STATE.update(yolo_left_status=pretty_json_string_or_raw(msg.data))
-        STATE.update_timestamp("yolo_left")
-
-    def yolo_right_status_callback(self, msg: String) -> None:
-        STATE.update(yolo_right_status=pretty_json_string_or_raw(msg.data))
-        STATE.update_timestamp("yolo_right")
-
     def mock_status_callback(self) -> None:
         t = time.time() - self.mock_start_time
 
@@ -1867,9 +1786,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--map-qos", choices=["reliable", "best_effort"], default="reliable")
     parser.add_argument("--image-qos-depth", type=int, default=10)
 
-    parser.add_argument("--rgb-topic", default="/zeri/vlm/input_rgb")
-    parser.add_argument("--depth-topic", default="/zeri/vlm/input_depth")
-    parser.add_argument("--pointcloud-topic", default="/zeri/vlm/pointcloud")
+    parser.add_argument("--rgb-topic", default="/camera/camera/color/image_raw")
+    parser.add_argument("--depth-topic", default="/camera/camera/aligned_depth_to_color/image_raw")
+    parser.add_argument("--pointcloud-topic", default="/camera/camera/depth/color/points")
     parser.add_argument("--pointcloud-max-points", type=int, default=30000)
     parser.add_argument("--pointcloud-max-range-m", type=float, default=5.0)
     parser.add_argument("--map-topic", default="/map")
@@ -1893,11 +1812,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vla-left-status-topic", default="/zeri/vla/left/status")
     parser.add_argument("--vla-right-status-topic", default="/zeri/vla/right/status")
     parser.add_argument("--vla-task-request-topic", default="/zeri/vla/task_request")
-    parser.add_argument("--left-handoff-image-topic", default="/zeri/vla/left/handoff_image")
-    parser.add_argument("--right-handoff-image-topic", default="/zeri/vla/right/handoff_image")
-    parser.add_argument("--handoff-status-topic", default="/zeri/vla/handoff/status")
-    parser.add_argument("--yolo-left-status-topic", default="/zeri/vla/left/yolo_handoff/status")
-    parser.add_argument("--yolo-right-status-topic", default="/zeri/vla/right/yolo_handoff/status")
 
     parser.add_argument(
         "--mock-status",
@@ -1916,7 +1830,7 @@ def main() -> None:
     rclpy.init(args=ros_args)
 
     if not hasattr(args, "pointcloud_topic"):
-        args.pointcloud_topic = "/zeri/vlm/pointcloud"
+        args.pointcloud_topic = "/camera/camera/depth/color/points"
     if not hasattr(args, "pointcloud_max_points"):
         args.pointcloud_max_points = 30000
     if not hasattr(args, "pointcloud_max_range_m"):

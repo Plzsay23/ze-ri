@@ -46,7 +46,8 @@ class EdgeTTSNode(Node):
 
         self.declare_parameter("edge_tts_bin", "edge-tts")
         self.declare_parameter("voice", "ko-KR-SunHiNeural")
-        self.declare_parameter("rate", "+0%")
+        # Edge-TTS speaking speed. 데모용 기본값: 약간 빠르게.
+        self.declare_parameter("rate", "+25%")
         self.declare_parameter("volume", "+80%")
         self.declare_parameter("pitch", "+0Hz")
 

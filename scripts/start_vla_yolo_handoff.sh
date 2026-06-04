@@ -21,7 +21,7 @@ MIN_RUN_SEC_BEFORE_RELEASE="8.0"
 ALLOW_RELEASE_WHILE_RUNNING="true"
 ROI="[0.0, 0.0, 1.0, 1.0]"
 SNAPSHOT_HZ="5"
-VLA_START_WAIT_SEC="3"
+VLA_START_WAIT_SEC="14"
 
 KEEP_VLA_ON_YOLO_EXIT="false"
 SIDECAR_ONLY="false"
@@ -162,11 +162,13 @@ YOLO_RIGHT_PID=""
 STARTED_VLA="false"
 
 count_left_clients() {
-  pgrep -af "robot_client_ros_multi_gate.*--zeri_client_name=left" 2>/dev/null | wc -l
+  # pgrep returns 1 when there are no matches. With set -e + pipefail, that would
+  # abort the wrapper before we can print a useful error. Force a successful pipe.
+  { pgrep -af "robot_client_ros_multi_gate.*--zeri_client_name=left" 2>/dev/null || true; } | wc -l
 }
 
 count_right_clients() {
-  pgrep -af "robot_client_ros_multi_gate.*--zeri_client_name=right" 2>/dev/null | wc -l
+  { pgrep -af "robot_client_ros_multi_gate.*--zeri_client_name=right" 2>/dev/null || true; } | wc -l
 }
 
 vla_stack_running() {
@@ -178,16 +180,69 @@ vla_stack_running() {
     || pgrep -f "start_vla_handoff.sh" >/dev/null 2>&1
 }
 
+kill_pids_by_pattern() {
+  local pattern="$1"
+  local label="$2"
+  local pids=""
+
+  # Exclude this wrapper process and its immediate shell from accidental self-kill.
+  pids="$(pgrep -f "$pattern" 2>/dev/null | awk -v self="$$" -v bashpid="${BASHPID:-$$}" '$1 != self && $1 != bashpid {print $1}' | sort -u | xargs || true)"
+
+  if [[ -z "$pids" ]]; then
+    return 0
+  fi
+
+  echo "[KILL] $label: $pids"
+  kill -TERM $pids 2>/dev/null || true
+}
+
+kill_pids_by_pattern_force() {
+  local pattern="$1"
+  local label="$2"
+  local pids=""
+
+  pids="$(pgrep -f "$pattern" 2>/dev/null | awk -v self="$$" -v bashpid="${BASHPID:-$$}" '$1 != self && $1 != bashpid {print $1}' | sort -u | xargs || true)"
+
+  if [[ -z "$pids" ]]; then
+    return 0
+  fi
+
+  echo "[KILL -9] $label: $pids"
+  kill -KILL $pids 2>/dev/null || true
+}
+
 kill_existing_vla_stack() {
   echo "[INFO] killing existing VLA/YOLO stack before restart..."
-  pkill -f "yolo_handoff_auto_release_node" 2>/dev/null || true
-  pkill -f "robot_client_ros_multi_gate_raw_home_handoff" 2>/dev/null || true
-  pkill -f "robot_client_ros_multi_gate" 2>/dev/null || true
-  pkill -f "vla_task_router_multi_node" 2>/dev/null || true
-  pkill -f "vla_handoff_supervisor_node" 2>/dev/null || true
-  pkill -f "lerobot.async_inference.policy_server" 2>/dev/null || true
-  pkill -f "start_vla_handoff.sh" 2>/dev/null || true
-  sleep 2
+
+  # First, stop children before their launchers. Some clients can hang in camera/motor cleanup,
+  # so TERM is followed by KILL if they remain alive.
+  kill_pids_by_pattern "yolo_handoff_auto_release_node" "YOLO sidecar"
+  kill_pids_by_pattern "robot_client_ros_multi_gate_raw_home_handoff" "VLA robot client handoff"
+  kill_pids_by_pattern "robot_client_ros_multi_gate" "VLA robot client"
+  kill_pids_by_pattern "vla_task_router_multi_node" "VLA router"
+  kill_pids_by_pattern "vla_handoff_supervisor_node" "VLA handoff supervisor"
+  kill_pids_by_pattern "lerobot.async_inference.policy_server" "policy server"
+  kill_pids_by_pattern "start_vla_handoff.sh" "VLA launcher"
+
+  sleep 3
+
+  # Force-kill stale processes that ignored TERM or got stuck during hardware disconnect.
+  kill_pids_by_pattern_force "yolo_handoff_auto_release_node" "YOLO sidecar"
+  kill_pids_by_pattern_force "robot_client_ros_multi_gate_raw_home_handoff" "VLA robot client handoff"
+  kill_pids_by_pattern_force "robot_client_ros_multi_gate" "VLA robot client"
+  kill_pids_by_pattern_force "vla_task_router_multi_node" "VLA router"
+  kill_pids_by_pattern_force "vla_handoff_supervisor_node" "VLA handoff supervisor"
+  kill_pids_by_pattern_force "lerobot.async_inference.policy_server" "policy server"
+  kill_pids_by_pattern_force "start_vla_handoff.sh" "VLA launcher"
+
+  sleep 1
+
+  if vla_stack_running; then
+    echo "[ERR] stale VLA stack still alive after TERM/KILL." >&2
+    print_vla_process_summary >&2
+    echo "[HINT] Check if another user/session/supervisor is restarting it, or kill listed PIDs manually." >&2
+    exit 1
+  fi
 }
 
 print_vla_process_summary() {
@@ -197,6 +252,40 @@ print_vla_process_summary() {
   pgrep -af "robot_client_ros_multi_gate.*--zeri_client_name=(left|right)" 2>/dev/null || true
   ss -ltnp 2>/dev/null | grep -E ":8081|:8082" || true
   echo "============================="
+}
+
+
+wait_for_required_clients() {
+  local deadline now left_count right_count
+  deadline=$(( $(date +%s) + ${VLA_START_WAIT_SEC%.*} ))
+
+  echo "[INFO] waiting up to ${VLA_START_WAIT_SEC}s for required VLA clients..."
+
+  while true; do
+    left_count="$(count_left_clients | tr -d ' ')"
+    right_count="$(count_right_clients | tr -d ' ')"
+
+    echo "[WAIT] left clients=${left_count}, right clients=${right_count}"
+
+    if [[ "$ARM" == "left" && "$left_count" -eq 1 ]]; then
+      return 0
+    fi
+    if [[ "$ARM" == "right" && "$right_count" -eq 1 ]]; then
+      return 0
+    fi
+    if [[ "$ARM" == "both" && "$left_count" -eq 1 && "$right_count" -eq 1 ]]; then
+      return 0
+    fi
+
+    now=$(date +%s)
+    if [[ "$now" -ge "$deadline" ]]; then
+      echo "[ERR] timed out waiting for VLA clients." >&2
+      print_vla_process_summary >&2
+      return 1
+    fi
+
+    sleep 1
+  done
 }
 
 validate_required_clients() {
@@ -320,8 +409,7 @@ else
   VLA_PID=$!
   STARTED_VLA="true"
 
-  echo "[INFO] waiting ${VLA_START_WAIT_SEC}s before starting YOLO sidecar..."
-  sleep "$VLA_START_WAIT_SEC"
+  wait_for_required_clients
   validate_required_clients
 fi
 
