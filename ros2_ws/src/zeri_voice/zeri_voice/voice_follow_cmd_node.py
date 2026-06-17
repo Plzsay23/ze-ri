@@ -5,26 +5,25 @@ import time
 from collections import deque
 
 import rclpy
+from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from std_msgs.msg import Bool, Float32, String
-from geometry_msgs.msg import Twist
 
 
 def wrap_deg(angle: float) -> float:
     return (angle + 180.0) % 360.0 - 180.0
 
 
-def clamp(x: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, x))
+def clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
 
 
-def circular_mean_deg(values):
+def circular_mean_deg(values: list[float]) -> float | None:
     if not values:
         return None
 
     sx = 0.0
     sy = 0.0
-
     for deg in values:
         rad = math.radians(deg)
         sx += math.cos(rad)
@@ -38,17 +37,14 @@ def circular_mean_deg(values):
 
 class VoiceFollowCmdNode(Node):
     """
-    Listen-Move-Listen voice follower.
+    Continuous voice-direction follower.
 
-    핵심:
-      - 모터 정지 상태에서만 DOA 수집
-      - 움직이는 동안 DOA 무시
-      - 모터 소리로 인한 DOA 오염 방지
-      - /cmd_vel_raw만 발행
-      - lateral q/e 없음
+    The node samples ReSpeaker VAD/DOA while voice is active, latches the
+    averaged direction, and publishes smooth /cmd_vel_raw commands at a fixed
+    rate. It intentionally does not create lateral commands.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__("voice_follow_cmd_node")
 
         self.declare_parameter("vad_topic", "/zeri/audio/vad")
@@ -59,25 +55,22 @@ class VoiceFollowCmdNode(Node):
         self.declare_parameter("front_angle_deg", 245.0)
         self.declare_parameter("invert_turn", False)
 
-        # LISTEN 단계
-        self.declare_parameter("listen_sec", 0.8)
-        self.declare_parameter("min_voice_samples", 5)
-        self.declare_parameter("max_sample_age_sec", 1.2)
+        self.declare_parameter("sample_window_sec", 0.8)
+        self.declare_parameter("min_voice_samples", 3)
+        self.declare_parameter("target_hold_sec", 4.0)
 
-        # MOVE 단계
-        self.declare_parameter("move_burst_sec", 0.45)
-        self.declare_parameter("post_move_stop_sec", 0.25)
+        self.declare_parameter("turn_deadband_deg", 10.0)
+        self.declare_parameter("turn_in_place_deg", 55.0)
+        self.declare_parameter("allow_arc_motion", False)
 
-        # 판단 각도
-        self.declare_parameter("align_enter_deg", 50.0)
-
-        # 명령
         self.declare_parameter("forward_speed", 0.16)
-        self.declare_parameter("min_turn_speed", 0.34)
-        self.declare_parameter("max_turn_speed", 0.42)
+        self.declare_parameter("min_forward_speed", 0.06)
         self.declare_parameter("turn_kp", 0.012)
+        self.declare_parameter("min_turn_speed", 0.08)
+        self.declare_parameter("max_turn_speed", 0.38)
 
-        self.declare_parameter("cmd_hz", 10.0)
+        self.declare_parameter("cmd_hz", 20.0)
+        self.declare_parameter("smooth_alpha", 0.35)
         self.declare_parameter("log_state", True)
 
         self.vad_topic = str(self.get_parameter("vad_topic").value)
@@ -88,37 +81,36 @@ class VoiceFollowCmdNode(Node):
         self.front_angle_deg = float(self.get_parameter("front_angle_deg").value)
         self.invert_turn = bool(self.get_parameter("invert_turn").value)
 
-        self.listen_sec = float(self.get_parameter("listen_sec").value)
+        self.sample_window_sec = float(self.get_parameter("sample_window_sec").value)
         self.min_voice_samples = int(self.get_parameter("min_voice_samples").value)
-        self.max_sample_age_sec = float(self.get_parameter("max_sample_age_sec").value)
+        self.target_hold_sec = float(self.get_parameter("target_hold_sec").value)
 
-        self.move_burst_sec = float(self.get_parameter("move_burst_sec").value)
-        self.post_move_stop_sec = float(self.get_parameter("post_move_stop_sec").value)
-
-        self.align_enter_deg = float(self.get_parameter("align_enter_deg").value)
+        self.turn_deadband_deg = float(self.get_parameter("turn_deadband_deg").value)
+        self.turn_in_place_deg = float(self.get_parameter("turn_in_place_deg").value)
+        self.allow_arc_motion = bool(self.get_parameter("allow_arc_motion").value)
 
         self.forward_speed = float(self.get_parameter("forward_speed").value)
+        self.min_forward_speed = float(self.get_parameter("min_forward_speed").value)
+        self.turn_kp = float(self.get_parameter("turn_kp").value)
         self.min_turn_speed = float(self.get_parameter("min_turn_speed").value)
         self.max_turn_speed = float(self.get_parameter("max_turn_speed").value)
-        self.turn_kp = float(self.get_parameter("turn_kp").value)
 
         self.cmd_hz = float(self.get_parameter("cmd_hz").value)
+        self.smooth_alpha = clamp(float(self.get_parameter("smooth_alpha").value), 0.0, 1.0)
         self.log_state = bool(self.get_parameter("log_state").value)
 
         self.vad = False
-        self.last_doa_deg = None
+        self.last_doa_deg: float | None = None
+        self.samples: deque[tuple[float, float]] = deque(maxlen=200)
 
-        self.mode = "LISTEN"
-        self.mode_start_time = time.time()
-
-        self.samples = deque(maxlen=100)
-
-        self.move_cmd = Twist()
-        self.target_doa_deg = None
+        self.target_doa_deg: float | None = None
         self.target_err_deg = 0.0
+        self.target_update_time = 0.0
+
+        self.active_cmd = Twist()
 
         self.last_state_log_time = 0.0
-        self.last_state_mode = None
+        self.last_state_mode: str | None = None
 
         self.cmd_pub = self.create_publisher(Twist, self.cmd_topic, 10)
         self.state_pub = self.create_publisher(String, self.state_topic, 10)
@@ -126,29 +118,47 @@ class VoiceFollowCmdNode(Node):
         self.create_subscription(Bool, self.vad_topic, self.on_vad, 10)
         self.create_subscription(Float32, self.doa_topic, self.on_doa, 10)
 
-        period = 1.0 / max(self.cmd_hz, 1.0)
-        self.timer = self.create_timer(period, self.on_timer)
+        self.timer = self.create_timer(1.0 / max(self.cmd_hz, 1.0), self.on_timer)
 
         self.get_logger().info(
-            "listen-move-listen voice follower started: "
+            "continuous voice follower started: "
             f"front={self.front_angle_deg}, invert_turn={self.invert_turn}, "
-            f"listen_sec={self.listen_sec}, move_burst_sec={self.move_burst_sec}"
+            f"hold={self.target_hold_sec}, cmd_hz={self.cmd_hz}"
         )
 
-    def on_vad(self, msg: Bool):
+    def on_vad(self, msg: Bool) -> None:
         self.vad = bool(msg.data)
 
-    def on_doa(self, msg: Float32):
-        self.last_doa_deg = float(msg.data) % 360.0
+    def on_doa(self, msg: Float32) -> None:
+        doa = float(msg.data) % 360.0
+        self.last_doa_deg = doa
 
-        # 핵심: 움직이는 동안 DOA는 저장하지 않음
-        if self.mode == "LISTEN" and self.vad:
-            self.samples.append((time.time(), self.last_doa_deg))
+        if self.vad:
+            self.samples.append((time.time(), doa))
 
-    def publish_stop(self):
-        self.cmd_pub.publish(Twist())
+    def trim_samples(self, now: float) -> None:
+        while self.samples and now - self.samples[0][0] > self.sample_window_sec:
+            self.samples.popleft()
 
-    def publish_state(self, text: str):
+    def update_target_from_voice(self, now: float) -> None:
+        self.trim_samples(now)
+        if len(self.samples) < self.min_voice_samples:
+            return
+
+        values = [doa for _, doa in self.samples]
+        doa = circular_mean_deg(values)
+        if doa is None:
+            return
+
+        err = wrap_deg(doa - self.front_angle_deg)
+        if self.invert_turn:
+            err = -err
+
+        self.target_doa_deg = doa
+        self.target_err_deg = err
+        self.target_update_time = now
+
+    def publish_state(self, text: str) -> None:
         msg = String()
         msg.data = text
         self.state_pub.publish(msg)
@@ -158,135 +168,94 @@ class VoiceFollowCmdNode(Node):
 
         now = time.time()
         mode = text.split(" ", 1)[0]
-
         if mode != self.last_state_mode or now - self.last_state_log_time > 1.0:
             self.get_logger().info(text)
             self.last_state_mode = mode
             self.last_state_log_time = now
 
-    def set_mode(self, mode: str):
-        self.mode = mode
-        self.mode_start_time = time.time()
+    def stop(self, reason: str) -> None:
+        self.active_cmd = Twist()
+        self.cmd_pub.publish(self.active_cmd)
+        self.publish_state(reason)
 
-    def fresh_samples(self):
-        now = time.time()
-        return [
-            doa for ts, doa in self.samples
-            if now - ts <= self.max_sample_age_sec
-        ]
-
-    def make_move_cmd_from_error(self, err_deg: float) -> Twist:
+    def desired_cmd_from_error(self, err_deg: float) -> tuple[str, Twist]:
         cmd = Twist()
-
         abs_err = abs(err_deg)
 
-        if abs_err <= self.align_enter_deg:
+        if abs_err > self.turn_deadband_deg:
+            turn = abs(err_deg) * self.turn_kp
+            turn = clamp(turn, self.min_turn_speed, self.max_turn_speed)
+            cmd.angular.z = math.copysign(turn, err_deg)
+
+        if abs_err <= self.turn_deadband_deg:
             cmd.linear.x = self.forward_speed
-            cmd.angular.z = 0.0
-            return cmd
+            mode = "FORWARD"
+        elif self.allow_arc_motion and abs_err < self.turn_in_place_deg:
+            span = max(self.turn_in_place_deg - self.turn_deadband_deg, 1e-6)
+            turn_ratio = clamp((abs_err - self.turn_deadband_deg) / span, 0.0, 1.0)
+            cmd.linear.x = self.forward_speed - (
+                self.forward_speed - self.min_forward_speed
+            ) * turn_ratio
+            mode = "ARC"
+        else:
+            cmd.linear.x = 0.0
+            mode = "TURN"
 
-        sign = 1.0 if err_deg > 0.0 else -1.0
+        cmd.linear.y = 0.0
+        return mode, cmd
 
-        speed = abs(self.turn_kp * err_deg)
-        speed = clamp(speed, self.min_turn_speed, self.max_turn_speed)
+    def smooth_cmd(self, desired: Twist) -> Twist:
+        alpha = self.smooth_alpha
 
-        cmd.linear.x = 0.0
-        cmd.angular.z = sign * speed
-        return cmd
+        out = Twist()
+        out.linear.x = alpha * desired.linear.x + (1.0 - alpha) * self.active_cmd.linear.x
+        out.linear.y = 0.0
+        out.angular.z = alpha * desired.angular.z + (1.0 - alpha) * self.active_cmd.angular.z
 
-    def decide_move(self):
-        samples = self.fresh_samples()
+        self.active_cmd = out
+        return out
 
-        if len(samples) < self.min_voice_samples:
-            self.move_cmd = Twist()
-            self.target_doa_deg = None
-            self.target_err_deg = 0.0
-            return False
-
-        doa = circular_mean_deg(samples)
-
-        if doa is None:
-            self.move_cmd = Twist()
-            self.target_doa_deg = None
-            self.target_err_deg = 0.0
-            return False
-
-        err = wrap_deg(doa - self.front_angle_deg)
-
-        if self.invert_turn:
-            err = -err
-
-        self.target_doa_deg = doa
-        self.target_err_deg = err
-        self.move_cmd = self.make_move_cmd_from_error(err)
-        return True
-
-    def on_timer(self):
+    def on_timer(self) -> None:
         now = time.time()
-        elapsed = now - self.mode_start_time
 
-        if self.mode == "LISTEN":
-            self.publish_stop()
+        if self.vad:
+            self.update_target_from_voice(now)
+        else:
+            self.trim_samples(now)
 
-            samples = self.fresh_samples()
+        has_target = (
+            self.target_doa_deg is not None
+            and now - self.target_update_time <= self.target_hold_sec
+        )
 
-            self.publish_state(
-                f"LISTEN vad={int(self.vad)} "
-                f"last_doa={-1.0 if self.last_doa_deg is None else self.last_doa_deg:.1f} "
-                f"samples={len(samples)}/{self.min_voice_samples} "
-                f"elapsed={elapsed:.2f}/{self.listen_sec:.2f}"
+        if not has_target:
+            self.samples.clear()
+            self.target_doa_deg = None
+            self.target_err_deg = 0.0
+            self.stop(
+                "WAIT_VOICE "
+                f"vad={int(self.vad)} "
+                f"samples={len(self.samples)}/{self.min_voice_samples} "
+                f"last_doa={-1.0 if self.last_doa_deg is None else self.last_doa_deg:.1f}"
             )
-
-            if elapsed >= self.listen_sec:
-                ok = self.decide_move()
-
-                if ok:
-                    self.set_mode("MOVE")
-                else:
-                    self.samples.clear()
-                    self.set_mode("LISTEN")
-
             return
 
-        if self.mode == "MOVE":
-            # 핵심: MOVE 중에는 새 DOA를 믿지 않고 기존 결정만 사용
-            self.cmd_pub.publish(self.move_cmd)
+        mode, desired = self.desired_cmd_from_error(self.target_err_deg)
+        cmd = self.smooth_cmd(desired)
+        self.cmd_pub.publish(cmd)
 
-            self.publish_state(
-                f"MOVE target_doa={-1.0 if self.target_doa_deg is None else self.target_doa_deg:.1f} "
-                f"front={self.front_angle_deg:.1f} "
-                f"err={self.target_err_deg:.1f} "
-                f"vx={self.move_cmd.linear.x:.3f} "
-                f"wz={self.move_cmd.angular.z:.3f} "
-                f"elapsed={elapsed:.2f}/{self.move_burst_sec:.2f}"
-            )
-
-            if elapsed >= self.move_burst_sec:
-                self.publish_stop()
-                self.samples.clear()
-                self.set_mode("PAUSE")
-
-            return
-
-        if self.mode == "PAUSE":
-            self.publish_stop()
-
-            self.publish_state(
-                f"PAUSE elapsed={elapsed:.2f}/{self.post_move_stop_sec:.2f}"
-            )
-
-            if elapsed >= self.post_move_stop_sec:
-                self.samples.clear()
-                self.set_mode("LISTEN")
-
-            return
-
-        self.publish_stop()
-        self.publish_state(f"UNKNOWN_MODE {self.mode}")
-        self.set_mode("LISTEN")
+        age = now - self.target_update_time
+        self.publish_state(
+            f"{mode} vad={int(self.vad)} "
+            f"target_doa={self.target_doa_deg:.1f} "
+            f"front={self.front_angle_deg:.1f} "
+            f"err={self.target_err_deg:.1f} "
+            f"vx={cmd.linear.x:.3f} wz={cmd.angular.z:.3f} "
+            f"age={age:.2f}/{self.target_hold_sec:.2f}"
+        )
 
 
-def main(args=None):
+def main(args=None) -> None:
     rclpy.init(args=args)
     node = VoiceFollowCmdNode()
 

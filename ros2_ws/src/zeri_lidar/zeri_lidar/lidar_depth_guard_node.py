@@ -26,7 +26,7 @@ class LidarDepthGuardNode(Node):
 
     목적:
       - 정면 장애물 감지
-      - 좌/우 중 더 널널한 방향으로 횡이동 회피
+      - 전방이 막히면 기본적으로 정지
       - LiDAR와 depth를 같이 사용
 
     출력:
@@ -90,6 +90,7 @@ class LidarDepthGuardNode(Node):
         self.declare_parameter("use_depth", True)
 
         # Avoid behavior
+        self.declare_parameter("enable_lateral_avoidance", False)
         self.declare_parameter("avoid_lateral_speed", 0.20)
         self.declare_parameter("avoid_min_time_sec", 0.7)
         self.declare_parameter("avoid_max_time_sec", 3.0)
@@ -144,6 +145,9 @@ class LidarDepthGuardNode(Node):
         self.depth_weight = float(self.get_parameter("depth_weight").value)
         self.use_depth = bool(self.get_parameter("use_depth").value)
 
+        self.enable_lateral_avoidance = bool(
+            self.get_parameter("enable_lateral_avoidance").value
+        )
         self.avoid_lateral_speed = float(self.get_parameter("avoid_lateral_speed").value)
         self.avoid_min_time_sec = float(self.get_parameter("avoid_min_time_sec").value)
         self.avoid_max_time_sec = float(self.get_parameter("avoid_max_time_sec").value)
@@ -442,6 +446,9 @@ class LidarDepthGuardNode(Node):
             )
 
     def _choose_avoid_direction(self) -> Optional[str]:
+        if not self.enable_lateral_avoidance or abs(self.avoid_lateral_speed) <= 1e-6:
+            return None
+
         left_ok = self.fused_left_score > 0.25
         right_ok = self.fused_right_score > 0.25
 

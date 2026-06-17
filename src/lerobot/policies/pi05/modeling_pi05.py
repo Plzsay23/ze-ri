@@ -1254,7 +1254,7 @@ class PI05Policy(PreTrainedPolicy):
             batch: Training batch containing observations and actions.
             reduction: How to reduce the loss. Options:
                 - "mean": Return scalar mean loss (default, backward compatible)
-                - "none": Return per-sample losses of shape (batch_size,) for RA-BC weighting
+                - "none": Return per-sample losses of shape (batch_size,)
         """
         # Prepare inputs
         images, img_masks = self._preprocess_images(batch)

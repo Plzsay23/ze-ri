@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>zeri_slam</name>
+  <version>0.0.1</version>
+  <description>SLAM integration package for Zero-Risk navigation.</description>
+  <maintainer email="yjhanna3@hansung.ac.kr">NBYtics</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>slam_toolbox</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

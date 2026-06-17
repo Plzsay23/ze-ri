@@ -8,8 +8,8 @@ set -Eeuo pipefail
 #   3) VLM-STT bridge
 #
 # This script does NOT start camera or VLA stack.
-# Start those separately when testing real handoff:
-#   SERIAL=_944122071303 bash scripts/realsense_pointcloud.sh
+# Start those separately when testing handoff:
+#   SERIAL=_944122071303 bash scripts/camera_rgbd.sh
 #   bash scripts/start_vla.sh
 
 ZERI_ROOT="${ZERI_ROOT:-$HOME/ze-ri}"

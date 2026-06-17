@@ -10,12 +10,20 @@ Output:
   /zeri/vla/status        std_msgs/String JSON
 
 Task request JSON examples:
+  {"selected_task":"water_delivery","instruction":"Deliver the water bottle to the person.","task_duration_sec":20.0,"timeout_sec":60.0}
   {"selected_task":"oxygen_mask_delivery","instruction":"Deliver the oxygen mask to the person.","task_duration_sec":20.0,"timeout_sec":60.0}
   {"selected_task":"radio_delivery","instruction":"Deliver the radio device to the person."}
 
 Optional route manifest JSON:
 {
   "routes": {
+    "water_delivery": {
+      "arm": "right",
+      "policy_id": "water_delivery",
+      "task": "Deliver the water bottle to the person.",
+      "duration_sec": 20.0,
+      "timeout_sec": 60.0
+    },
     "oxygen_mask_delivery": {
       "arm": "left",
       "policy_id": "oxygen_mask_delivery",
@@ -58,6 +66,14 @@ class RouteSpec:
 
 
 DEFAULT_ROUTES: dict[str, RouteSpec] = {
+    "water_delivery": RouteSpec(
+        selected_task="water_delivery",
+        arm="right",
+        policy_id="water_delivery",
+        task="Deliver the water bottle to the person.",
+        duration_sec=20.0,
+        timeout_sec=60.0,
+    ),
     "oxygen_mask_delivery": RouteSpec(
         selected_task="oxygen_mask_delivery",
         arm="left",

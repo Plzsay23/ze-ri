@@ -18,6 +18,7 @@ from std_msgs.msg import String
 
 
 SUPPORTED_TASKS = {
+    "water_delivery",
     "oxygen_mask_delivery",
     "radio_delivery",
 }
@@ -84,6 +85,7 @@ class VlaActTaskExecutorNode(Node):
       /zeri/vla/status : std_msgs/String JSON
 
     Supported selected_task:
+      - water_delivery
       - oxygen_mask_delivery
       - radio_delivery
 
@@ -312,6 +314,9 @@ class VlaActTaskExecutorNode(Node):
         if selected_task == "oxygen_mask_delivery":
             return self.oxygen_instruction or selected_task
 
+        if selected_task == "water_delivery":
+            return selected_task
+
         if selected_task == "radio_delivery":
             return self.radio_instruction or selected_task
 
@@ -324,6 +329,14 @@ class VlaActTaskExecutorNode(Node):
                 self.oxygen_robot_id or self.robot_id,
                 self.oxygen_robot_cameras or self.robot_cameras,
                 self.oxygen_act_policy_path,
+            )
+
+        if selected_task == "water_delivery":
+            return (
+                self.radio_robot_port or self.robot_port,
+                self.radio_robot_id or self.robot_id,
+                self.radio_robot_cameras or self.robot_cameras,
+                self.radio_act_policy_path,
             )
 
         if selected_task == "radio_delivery":

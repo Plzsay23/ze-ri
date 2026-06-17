@@ -40,8 +40,10 @@ RIGHT_SERVER_PORT="${RIGHT_SERVER_PORT:-8082}"
 
 LEFT_MODEL="${LEFT_MODEL:-plzsay/pick_mask_act}"
 RIGHT_MODEL="${RIGHT_MODEL:-plzsay/pick_wt_act}"
+WATER_MODEL="${WATER_MODEL:-plzsay/pick_water_act}"
 LEFT_POLICY_ID="${LEFT_POLICY_ID:-pick_mask_act}"
 RIGHT_POLICY_ID="${RIGHT_POLICY_ID:-pick_wt_act}"
+WATER_POLICY_ID="${WATER_POLICY_ID:-pick_water_act}"
 
 LEFT_ARM_PORT="${LEFT_ARM_PORT:-/dev/follower_left}"
 RIGHT_ARM_PORT="${RIGHT_ARM_PORT:-/dev/follower_right}"
@@ -129,6 +131,12 @@ cat > "$RIGHT_MANIFEST" <<JSON
       "policy_type": "act",
       "pretrained_name_or_path": "$RIGHT_MODEL",
       "description": "Right-arm ACT policy. Camera key: top."
+    },
+    {
+      "id": "$WATER_POLICY_ID",
+      "policy_type": "act",
+      "pretrained_name_or_path": "$WATER_MODEL",
+      "description": "Right-arm water delivery policy. Camera key: top."
     }
   ]
 }
@@ -137,6 +145,13 @@ JSON
 cat > "$ROUTE_MANIFEST" <<JSON
 {
   "routes": {
+    "water_delivery": {
+      "arm": "right",
+      "policy_id": "$WATER_POLICY_ID",
+      "task": "Pick up the water bottle.",
+      "duration_sec": $RUN_DURATION_SEC,
+      "timeout_sec": $TIMEOUT_SEC
+    },
     "oxygen_mask_delivery": {
       "arm": "left",
       "policy_id": "$LEFT_POLICY_ID",
@@ -314,11 +329,14 @@ echo
 echo "[READY] two-arm VLA stack started."
 echo "[INFO] logs: $LOG_DIR"
 echo
-echo "Test left:"
-echo "  ros2 topic pub --once /zeri/vla/task_request std_msgs/msg/String \"{data: '{\\\"selected_task\\\":\\\"pen_and_cup_left\\\",\\\"instruction\\\":\\\"Pick up the pen and place it in the cup.\\\",\\\"task_duration_sec\\\":20.0,\\\"timeout_sec\\\":60.0}'}\""
+echo "Test water:"
+echo "  ros2 topic pub --once /zeri/vla/task_request std_msgs/msg/String \"{data: '{\\\"selected_task\\\":\\\"water_delivery\\\",\\\"instruction\\\":\\\"Deliver the water bottle to the person.\\\",\\\"task_duration_sec\\\":20.0,\\\"timeout_sec\\\":60.0}'}\""
 echo
-echo "Test right:"
-echo "  ros2 topic pub --once /zeri/vla/task_request std_msgs/msg/String \"{data: '{\\\"selected_task\\\":\\\"pen_and_cup_right\\\",\\\"instruction\\\":\\\"Pick up the pen and place it in the cup.\\\",\\\"task_duration_sec\\\":20.0,\\\"timeout_sec\\\":60.0}'}\""
+echo "Test oxygen mask:"
+echo "  ros2 topic pub --once /zeri/vla/task_request std_msgs/msg/String \"{data: '{\\\"selected_task\\\":\\\"oxygen_mask_delivery\\\",\\\"instruction\\\":\\\"Deliver the oxygen mask to the person.\\\",\\\"task_duration_sec\\\":20.0,\\\"timeout_sec\\\":60.0}'}\""
+echo
+echo "Test radio:"
+echo "  ros2 topic pub --once /zeri/vla/task_request std_msgs/msg/String \"{data: '{\\\"selected_task\\\":\\\"radio_delivery\\\",\\\"instruction\\\":\\\"Deliver the radio device to the person.\\\",\\\"task_duration_sec\\\":20.0,\\\"timeout_sec\\\":60.0}'}\""
 echo
 echo "Monitor:"
 echo "  ros2 topic echo /zeri/vla/status"

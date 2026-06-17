@@ -26,6 +26,7 @@ LED_NAME_MAP = {
 }
 
 SUPPORTED_VLA_TASKS = {
+    "water_delivery",
     "oxygen_mask_delivery",
     "radio_delivery",
 }
@@ -33,6 +34,7 @@ SUPPORTED_VLA_TASKS = {
 VALID_TASKS = {
     "idle",
     "status_check",
+    "water_delivery",
     "oxygen_mask_delivery",
     "radio_delivery",
     "call_rescue",
@@ -99,17 +101,20 @@ SYSTEM_PROMPT = """
 - 실제 VLA 실행은 별도 executor가 수행한다.
 - 로봇팔 home 복귀도 별도 노드가 수행한다. 너는 arm_home_required만 판단한다.
 
-현재 사용 가능한 ACT VLA task는 정확히 두 개뿐이다:
-1. oxygen_mask_delivery
+현재 사용 가능한 ACT VLA task는 정확히 세 개다:
+1. water_delivery
+   - 물 전달
+2. oxygen_mask_delivery
    - 산소마스크 전달
-2. radio_delivery
+3. radio_delivery
    - 무전기 전달
 
-이 두 task 외에는 VLA를 실행하면 안 된다.
+이 세 task 외에는 VLA를 실행하면 안 된다.
 그 외 상황은 idle, status_check, call_rescue 중 하나로 판단한다.
 
 소방 초동 대응 대화 원칙:
 - 먼저 의식과 반응을 확인한다: "제 말 들리십니까? 괜찮으십니까?"
+- 목마름, 갈증, 물 요청은 물 전달로 판단한다.
 - 호흡곤란, 연기/가스 흡입, 질식 호소는 우선 산소마스크 전달로 판단한다.
 - 구조대와 연락, 통신 요청, 신고 요청은 무전기 전달 또는 구조대 호출로 판단한다.
 - 무반응, 이동 불가, 중증 외상, 심한 출혈, 호흡 이상, 연기/화재 근접은 critical 또는 danger로 판단한다.
@@ -143,8 +148,8 @@ LED command rule:
   "mission_state": "SEARCH_PERSON|SELECT_TARGET|APPROACH_PERSON|STOP_AT_DISTANCE|TRIAGE_DIALOGUE|RUN_VLA|VERIFY_HANDOFF|RETURN_ARM_HOME|MARK_AND_REPORT|RESUME_SEARCH",
   "selected_person_id": "문자열 또는 none",
   "hazard_level": "normal|caution|urgent|critical|danger",
-  "scene_status": "normal|respiratory_distress|needs_communication|no_response|fire_nearby|smoke_or_gas|blocked_path|unknown",
-  "selected_task": "idle|status_check|oxygen_mask_delivery|radio_delivery|call_rescue",
+  "scene_status": "normal|needs_water|respiratory_distress|needs_communication|no_response|fire_nearby|smoke_or_gas|blocked_path|unknown",
+  "selected_task": "idle|status_check|water_delivery|oxygen_mask_delivery|radio_delivery|call_rescue",
   "nav_intent": "stop|hold_position|rotate_search|approach_person|follow_voice|retreat|go_to_safe_zone",
   "vla_required": true,
   "vla_instruction": "Deliver the oxygen mask to the person.",
@@ -161,6 +166,11 @@ LED command rule:
 }
 
 규칙:
+- selected_task가 water_delivery이면:
+  - vla_required = true
+  - vla_instruction = "Deliver the water bottle to the person."
+  - mission_state = RUN_VLA
+  - led_cmd = 2 또는 5
 - selected_task가 oxygen_mask_delivery이면:
   - vla_required = true
   - vla_instruction = "Deliver the oxygen mask to the person."
@@ -189,7 +199,7 @@ USER_PROMPT_TEMPLATE = """
 현재 카메라 장면, STT 텍스트, mission_context를 보고 Ze-Ri의 다음 임무 상태를 판단해라.
 
 이번 단계에서는 상태기계, LED, TTS, ACT 기반 VLA task, handoff 확인, 지도 마킹까지 연동한다.
-단, 실제 실행 가능한 VLA task는 oxygen_mask_delivery, radio_delivery 두 개뿐이다.
+단, 실제 실행 가능한 VLA task는 water_delivery, oxygen_mask_delivery, radio_delivery 세 개뿐이다.
 
 요청 종류:
 {request_kind}

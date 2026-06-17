@@ -6,6 +6,12 @@
       "policy_type": "act",
       "pretrained_name_or_path": "plzsay/pick_wt_act",
       "description": "Right-arm ACT policy. Camera key: top."
+    },
+    {
+      "id": "pick_water_act",
+      "policy_type": "act",
+      "pretrained_name_or_path": "plzsay/pick_water_act",
+      "description": "Right-arm water delivery policy. Camera key: top."
     }
   ]
 }

@@ -25,8 +25,6 @@ from .pi05.configuration_pi05 import PI05Config as PI05Config
 from .pretrained import PreTrainedPolicy as PreTrainedPolicy
 from .sac.configuration_sac import SACConfig as SACConfig
 from .sac.reward_model.configuration_classifier import RewardClassifierConfig as RewardClassifierConfig
-from .sarm.configuration_sarm import SARMConfig as SARMConfig
-from .smolvla.configuration_smolvla import SmolVLAConfig as SmolVLAConfig
 from .tdmpc.configuration_tdmpc import TDMPCConfig as TDMPCConfig
 from .utils import make_robot_action, prepare_observation_for_inference
 from .vqbet.configuration_vqbet import VQBeTConfig as VQBeTConfig
@@ -48,8 +46,6 @@ __all__ = [
     "PI05Config",
     "RewardClassifierConfig",
     "SACConfig",
-    "SARMConfig",
-    "SmolVLAConfig",
     "TDMPCConfig",
     "VQBeTConfig",
     "WallXConfig",

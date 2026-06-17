@@ -1,6 +1,7 @@
 from pathlib import Path
+import os
 
-DEFAULT_MODEL_DIR = Path(__file__).resolve().parents[3] / "models" / "sensevoice_ko"
+DEFAULT_MODEL_DIR = Path(os.environ.get("ZERI_ROOT", Path.home() / "ze-ri")) / "models" / "sensevoice_ko"
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration

@@ -4,7 +4,7 @@ package_name = 'zeri_bringup'
 
 setup(
     name=package_name,
-    version='0.0.0',
+    version='0.0.1',
     packages=find_packages(exclude=['test']),
     data_files=[
         ('share/ament_index/resource_index/packages',
@@ -13,15 +13,10 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='hansungai',
+    maintainer='NBYtics',
     maintainer_email='yjhanna3@hansung.ac.kr',
-    description='TODO: Package description',
-    license='TODO: License declaration',
-    extras_require={
-        'test': [
-            'pytest',
-        ],
-    },
+    description='Zero-Risk mission behavior engine for person approach and HRI handoff',
+    license='MIT',
     entry_points={
         'console_scripts': [
             'disaster_behavior_engine_node = zeri_bringup.disaster_behavior_engine_node:main',

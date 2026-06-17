@@ -43,7 +43,7 @@ Usage examples
         --robot.port=/dev/ttyACM0 \\
         --task="pick up cube" --duration=30
 
-    # Base mode — RTC inference for slow VLAs (Pi0, Pi0.5, SmolVLA)
+    # Base mode — RTC inference for slow VLA models
     lerobot-rollout \\
         --strategy.type=base \\
         --policy.path=lerobot/pi0_base \\

@@ -26,7 +26,7 @@ class SenseVoiceSTTNode(Node):
         # -----------------------------
         self.declare_parameter(
             "model_dir",
-            "/home/lerobot/NBYtics/models/sensevoice_ko",
+            os.path.expanduser("~/ze-ri/models/sensevoice_ko"),
         )
         self.declare_parameter("model_name", "model.onnx")
         self.declare_parameter("language", "ko")

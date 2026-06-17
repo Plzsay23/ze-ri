@@ -17,32 +17,21 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project.urls]
-homepage = "https://huggingface.co/lerobot"
-documentation = "https://huggingface.co/docs/lerobot/index"
-source = "https://github.com/huggingface/lerobot"
-issues = "https://github.com/huggingface/lerobot/issues"
-discord = "https://discord.gg/s3KuuzsPFb"
+homepage = "https://github.com/Plzsay23/ze-ri"
+source = "https://github.com/Plzsay23/ze-ri"
+issues = "https://github.com/Plzsay23/ze-ri/issues"
 
 [project]
 name = "lerobot"
 version = "0.5.2"
-description = "🤗 LeRobot: State-of-the-art Machine Learning for Real-World Robotics in Pytorch"
+description = "Zero-Risk: VLM-based intelligent mobile manipulator for disaster initial response"
 dynamic = ["readme"]
 license = { text = "Apache-2.0" }
 requires-python = ">=3.12"
 authors = [
-    { name = "Rémi Cadène", email = "re.cadene@gmail.com" },
-    { name = "Simon Alibert", email = "alibert.sim@gmail.com" },
-    { name = "Alexander Soare", email = "alexander.soare159@gmail.com" },
-    { name = "Quentin Gallouédec", email = "quentin.gallouedec@ec-lyon.fr" },
-    { name = "Steven Palma", email = "imstevenpmwork@ieee.org" },
-    { name = "Pepijn Kooijmans", email = "pepijnkooijmans@outlook.com"},
-    { name = "Michel Aractingi", email = "michel.aractingi@gmail.com"},
-    { name = "Adil Zouitine", email = "adilzouitinegm@gmail.com" },
-    { name = "Dana Aubakirova", email = "danaaubakirova17@gmail.com"},
-    { name = "Caroline Pascal", email = "caroline8.pascal@gmail.com"},
-    { name = "Martino Russi", email = "nopyeps@gmail.com"},
-    { name = "Thomas Wolf", email = "thomaswolfcontact@gmail.com" },
+    { name = "Seung-Jae Yoon", email = "yjhanna3@hansung.ac.kr" },
+    { name = "Nam-In Kim", email = "2171219@hansung.ac.kr" },
+    { name = "Beom-su Kim", email = "2171190@hansung.ac.kr" },
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -55,7 +44,7 @@ classifiers = [
     "Topic :: Software Development :: Build Tools",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-keywords = ["lerobot", "huggingface", "robotics",  "machine learning", "artificial intelligence"]
+keywords = ["zero-risk", "disaster-response", "ros2", "vlm", "vla", "mobile-manipulator"]
 
 dependencies = [
     # Core ML
@@ -180,7 +169,6 @@ wallx = [
     "lerobot[qwen-vl-utils-dep]",
 ]
 pi = ["lerobot[transformers-dep]", "lerobot[scipy-dep]"]
-smolvla = ["lerobot[transformers-dep]", "num2words>=0.5.14,<0.6.0", "accelerate>=1.7.0,<2.0.0"]
 multi_task_dit = ["lerobot[transformers-dep]", "lerobot[diffusers-dep]"]
 groot = [
     "lerobot[transformers-dep]",
@@ -192,7 +180,6 @@ groot = [
     "ninja>=1.11.1,<2.0.0",
     "flash-attn>=2.5.9,<3.0.0 ; sys_platform != 'darwin'"
 ]
-sarm = ["lerobot[transformers-dep]", "pydantic>=2.0.0,<3.0.0", "faker>=33.0.0,<35.0.0", "lerobot[matplotlib-dep]", "lerobot[qwen-vl-utils-dep]"]
 xvla = ["lerobot[transformers-dep]"]
 hilserl = ["lerobot[transformers-dep]", "gym-hil>=0.1.13,<0.2.0", "lerobot[grpcio-dep]", "lerobot[placo-dep]"]
 
@@ -254,7 +241,6 @@ all = [
     "lerobot[multi_task_dit]",
     "lerobot[wallx]",
     "lerobot[pi]",
-    "lerobot[smolvla]",
     # "lerobot[groot]", TODO(Steven): Gr00t requires specific installation instructions for flash-attn
     "lerobot[xvla]",
     "lerobot[hilserl]",
@@ -267,7 +253,6 @@ all = [
     "lerobot[phone]",
     "lerobot[libero]; sys_platform == 'linux'",
     "lerobot[metaworld]",
-    "lerobot[sarm]",
     "lerobot[peft]",
     # "lerobot[unitree_g1]", TODO: Unitree requires specific installation instructions for unitree_sdk2
 ]

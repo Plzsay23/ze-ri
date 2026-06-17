@@ -53,8 +53,6 @@ from .pi05.configuration_pi05 import PI05Config
 from .pretrained import PreTrainedPolicy
 from .sac.configuration_sac import SACConfig
 from .sac.reward_model.configuration_classifier import RewardClassifierConfig
-from .sarm.configuration_sarm import SARMConfig
-from .smolvla.configuration_smolvla import SmolVLAConfig
 from .tdmpc.configuration_tdmpc import TDMPCConfig
 from .utils import validate_visual_features_consistency
 from .vqbet.configuration_vqbet import VQBeTConfig
@@ -90,7 +88,7 @@ def get_policy_class(name: str) -> type[PreTrainedPolicy]:
 
     Args:
         name: The name of the policy. Supported names are "tdmpc", "diffusion", "act",
-            "multi_task_dit", "vqbet", "pi0", "pi05", "sac", "reward_classifier", "smolvla", "wall_x".
+            "multi_task_dit", "vqbet", "pi0", "pi05", "sac", "reward_classifier", "wall_x".
     Returns:
         The policy class corresponding to the given name.
 
@@ -137,14 +135,6 @@ def get_policy_class(name: str) -> type[PreTrainedPolicy]:
         from .sac.reward_model.modeling_classifier import Classifier
 
         return Classifier
-    elif name == "smolvla":
-        from .smolvla.modeling_smolvla import SmolVLAPolicy
-
-        return SmolVLAPolicy
-    elif name == "sarm":
-        from .sarm.modeling_sarm import SARMRewardModel
-
-        return SARMRewardModel
     elif name == "groot":
         from .groot.modeling_groot import GrootPolicy
 
@@ -174,7 +164,7 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
     Args:
         policy_type: The type of the policy. Supported types include "tdmpc",
                      "multi_task_dit", "diffusion", "act", "vqbet", "pi0", "pi05", "sac",
-                     "smolvla", "reward_classifier", "wall_x".
+                     "reward_classifier", "wall_x".
         **kwargs: Keyword arguments to be passed to the configuration class constructor.
 
     Returns:
@@ -199,8 +189,6 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return PI05Config(**kwargs)
     elif policy_type == "sac":
         return SACConfig(**kwargs)
-    elif policy_type == "smolvla":
-        return SmolVLAConfig(**kwargs)
     elif policy_type == "reward_classifier":
         return RewardClassifierConfig(**kwargs)
     elif policy_type == "groot":
@@ -387,22 +375,6 @@ def make_pre_post_processors(
             dataset_stats=kwargs.get("dataset_stats"),
         )
 
-    elif isinstance(policy_cfg, SmolVLAConfig):
-        from .smolvla.processor_smolvla import make_smolvla_pre_post_processors
-
-        processors = make_smolvla_pre_post_processors(
-            config=policy_cfg,
-            dataset_stats=kwargs.get("dataset_stats"),
-        )
-
-    elif isinstance(policy_cfg, SARMConfig):
-        from .sarm.processor_sarm import make_sarm_pre_post_processors
-
-        processors = make_sarm_pre_post_processors(
-            config=policy_cfg,
-            dataset_stats=kwargs.get("dataset_stats"),
-            dataset_meta=kwargs.get("dataset_meta"),
-        )
     elif isinstance(policy_cfg, GrootConfig):
         from .groot.processor_groot import make_groot_pre_post_processors
 
@@ -536,7 +508,7 @@ def make_policy(
 
     kwargs["config"] = cfg
 
-    # Pass dataset_stats to the policy if available (needed for some policies like SARM)
+    # Pass dataset_stats to the policy if available.
     if ds_meta is not None and hasattr(ds_meta, "stats"):
         kwargs["dataset_stats"] = ds_meta.stats
 

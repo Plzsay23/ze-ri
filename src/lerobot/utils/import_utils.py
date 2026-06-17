@@ -126,7 +126,6 @@ _hidapi_available = is_package_available("hidapi", import_name="hid")
 
 # Data / serialization
 _pandas_available = is_package_available("pandas")
-_faker_available = is_package_available("faker")
 
 # Misc
 _pynput_available = is_package_available("pynput")

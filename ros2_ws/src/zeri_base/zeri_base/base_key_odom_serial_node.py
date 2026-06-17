@@ -70,6 +70,9 @@ class BaseKeyOdomSerialNode(Node):
 
         self.declare_parameter("cmd_timeout_sec", 0.50)
         self.declare_parameter("key_hz", 20.0)
+        self.declare_parameter("odom_publish_hz", 20.0)
+        self.declare_parameter("publish_open_loop_odom", True)
+        self.declare_parameter("encoder_timeout_sec", 0.30)
 
         self.declare_parameter("linear_deadband", 0.03)
         self.declare_parameter("angular_deadband", 0.05)
@@ -106,6 +109,9 @@ class BaseKeyOdomSerialNode(Node):
 
         self.cmd_timeout_sec = float(self.get_parameter("cmd_timeout_sec").value)
         self.key_hz = float(self.get_parameter("key_hz").value)
+        self.odom_publish_hz = float(self.get_parameter("odom_publish_hz").value)
+        self.publish_open_loop_odom = bool(self.get_parameter("publish_open_loop_odom").value)
+        self.encoder_timeout_sec = float(self.get_parameter("encoder_timeout_sec").value)
 
         self.linear_deadband = float(self.get_parameter("linear_deadband").value)
         self.angular_deadband = float(self.get_parameter("angular_deadband").value)
@@ -146,6 +152,8 @@ class BaseKeyOdomSerialNode(Node):
         self.turn_mix_acc = 0.0
 
         self.prev_enc = None
+        self.last_encoder_time = 0.0
+        self.last_open_loop_stamp = self.get_clock().now()
 
         self.x = 0.0
         self.y = 0.0
@@ -165,12 +173,17 @@ class BaseKeyOdomSerialNode(Node):
 
         self.read_timer = self.create_timer(0.01, self.read_serial_once)
         self.key_timer = self.create_timer(1.0 / max(self.key_hz, 1.0), self.send_key_once)
+        self.odom_timer = self.create_timer(
+            1.0 / max(self.odom_publish_hz, 1.0),
+            self.publish_open_loop_odom_once,
+        )
 
         self.get_logger().info(
             "base key odom serial node started: "
             f"port={self.port}, baudrate={self.baudrate}, "
             f"cmd={self.cmd_topic}, odom={self.odom_topic}, "
-            f"key_hz={self.key_hz}, mixed_forward_turn={self.mixed_forward_turn}"
+            f"key_hz={self.key_hz}, mixed_forward_turn={self.mixed_forward_turn}, "
+            f"open_loop_odom={self.publish_open_loop_odom}"
         )
 
     def now_sec(self):
@@ -310,6 +323,7 @@ class BaseKeyOdomSerialNode(Node):
             return
 
         enc = (lf, rf, lr, rr)
+        self.last_encoder_time = self.now_sec()
 
         if self.prev_enc is None:
             self.prev_enc = enc
@@ -337,6 +351,42 @@ class BaseKeyOdomSerialNode(Node):
 
         base_sum = max(self.lx + self.ly, 1e-6)
         dyaw = (-fl + fr - rl + rr_m) / (4.0 * base_sum)
+
+        self.integrate_odom(dx_body, dy_body, dyaw)
+
+    def publish_open_loop_odom_once(self):
+        if not self.publish_open_loop_odom:
+            return
+
+        now = self.get_clock().now()
+        now_sec = now.nanoseconds * 1e-9
+
+        encoder_alive = (
+            self.last_encoder_time > 0.0
+            and now_sec - self.last_encoder_time <= self.encoder_timeout_sec
+        )
+        if encoder_alive:
+            self.last_open_loop_stamp = now
+            return
+
+        dt = (now.nanoseconds - self.last_open_loop_stamp.nanoseconds) * 1e-9
+        if dt <= 0.0:
+            return
+
+        self.last_open_loop_stamp = now
+
+        cmd_fresh = (now_sec - self.last_cmd_time) <= self.cmd_timeout_sec
+        if not cmd_fresh:
+            self.publish_odom(0.0, 0.0, 0.0)
+            return
+
+        vx = float(self.last_cmd.linear.x)
+        vy = float(self.last_cmd.linear.y) if self.enable_strafe else 0.0
+        wz = float(self.last_cmd.angular.z)
+
+        dx_body = vx * dt
+        dy_body = vy * dt
+        dyaw = wz * dt
 
         self.integrate_odom(dx_body, dy_body, dyaw)
 

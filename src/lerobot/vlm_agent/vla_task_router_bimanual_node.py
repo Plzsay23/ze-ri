@@ -37,6 +37,14 @@ class RouteSpec:
 
 
 DEFAULT_ROUTES: dict[str, RouteSpec] = {
+    "water_delivery": RouteSpec(
+        selected_task="water_delivery",
+        arm="right",
+        policy_id="pick_water_act",
+        task="Deliver the water bottle to the person.",
+        duration_sec=20.0,
+        timeout_sec=60.0,
+    ),
     "oxygen_mask_delivery": RouteSpec(
         selected_task="oxygen_mask_delivery",
         arm="left",

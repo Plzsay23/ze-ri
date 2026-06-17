@@ -248,8 +248,6 @@ class PreTrainedPolicy(nn.Module, HubMixin, abc.ABC):
     def generate_model_card(
         self, dataset_repo_id: str, model_type: str, license: str | None, tags: list[str] | None
     ) -> ModelCard:
-        base_model = "lerobot/smolvla_base" if model_type == "smolvla" else None  # Set a base model
-
         card_data = ModelCardData(
             license=license or "apache-2.0",
             library_name="lerobot",
@@ -257,7 +255,7 @@ class PreTrainedPolicy(nn.Module, HubMixin, abc.ABC):
             tags=list(set(tags or []).union({"robotics", "lerobot", model_type})),
             model_name=model_type,
             datasets=dataset_repo_id,
-            base_model=base_model,
+            base_model=None,
         )
 
         template_card = (

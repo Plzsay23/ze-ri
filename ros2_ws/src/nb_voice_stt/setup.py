@@ -15,11 +15,10 @@ setup(
     ],
     install_requires=["setuptools"],
     zip_safe=True,
-    maintainer="lerobot",
-    maintainer_email="lerobot@todo.todo",
+    maintainer="NBYtics",
+    maintainer_email="yjhanna3@hansung.ac.kr",
     description="Real-time SenseVoice STT node for ROS 2",
     license="Apache-2.0",
-    tests_require=["pytest"],
     entry_points={
         "console_scripts": [
             "stt_node = nb_voice_stt.stt_node:main",

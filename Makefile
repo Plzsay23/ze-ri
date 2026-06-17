@@ -1,180 +1,27 @@
-# Copyright 2024 The HuggingFace Inc. team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+.PHONY: smoke
 
-.PHONY: tests
-
-PYTHON_PATH := $(shell which python)
-
-# If uv is installed and a virtual environment exists, use it
-UV_CHECK := $(shell command -v uv)
-ifneq ($(UV_CHECK),)
-	PYTHON_PATH := $(shell .venv/bin/python)
-endif
-
-export PATH := $(dir $(PYTHON_PATH)):$(PATH)
-
-DEVICE ?= cpu
-
-build-user:
-	docker build -f docker/Dockerfile.user -t lerobot-user .
-
-build-internal:
-	docker build -f docker/Dockerfile.internal -t lerobot-internal .
-
-test-end-to-end:
-	${MAKE} DEVICE=$(DEVICE) test-act-ete-train
-	${MAKE} DEVICE=$(DEVICE) test-act-ete-train-resume
-	${MAKE} DEVICE=$(DEVICE) test-act-ete-eval
-	${MAKE} DEVICE=$(DEVICE) test-diffusion-ete-train
-	${MAKE} DEVICE=$(DEVICE) test-diffusion-ete-eval
-	${MAKE} DEVICE=$(DEVICE) test-tdmpc-ete-train
-	${MAKE} DEVICE=$(DEVICE) test-tdmpc-ete-eval
-	${MAKE} DEVICE=$(DEVICE) test-smolvla-ete-train
-	${MAKE} DEVICE=$(DEVICE) test-smolvla-ete-eval
-
-test-act-ete-train:
-	lerobot-train \
-		--policy.type=act \
-		--policy.dim_model=64 \
-		--policy.n_action_steps=20 \
-		--policy.chunk_size=20 \
-		--policy.device=$(DEVICE) \
-		--policy.push_to_hub=false \
-		--env.type=aloha \
-		--env.episode_length=5 \
-		--dataset.repo_id=lerobot/aloha_sim_transfer_cube_human \
-		--dataset.image_transforms.enable=true \
-		--dataset.episodes="[0]" \
-		--batch_size=2 \
-		--steps=4 \
-		--eval_freq=2 \
-		--eval.n_episodes=1 \
-		--eval.batch_size=1 \
-		--save_freq=2 \
-		--save_checkpoint=true \
-		--log_freq=1 \
-		--wandb.enable=false \
-		--output_dir=tests/outputs/act/
-
-test-act-ete-train-resume:
-	lerobot-train \
-		--config_path=tests/outputs/act/checkpoints/000002/pretrained_model/train_config.json \
-		--resume=true
-
-test-act-ete-eval:
-	lerobot-eval \
-		--policy.path=tests/outputs/act/checkpoints/000004/pretrained_model \
-		--policy.device=$(DEVICE) \
-		--env.type=aloha \
-		--env.episode_length=5 \
-		--eval.n_episodes=1 \
-		--eval.batch_size=1
-
-test-diffusion-ete-train:
-	lerobot-train \
-		--policy.type=diffusion \
-		--policy.down_dims='[64,128,256]' \
-		--policy.diffusion_step_embed_dim=32 \
-		--policy.num_inference_steps=10 \
-		--policy.device=$(DEVICE) \
-		--policy.push_to_hub=false \
-		--env.type=pusht \
-		--env.episode_length=5 \
-		--dataset.repo_id=lerobot/pusht \
-		--dataset.image_transforms.enable=true \
-		--dataset.episodes="[0]" \
-		--batch_size=2 \
-		--steps=2 \
-		--eval_freq=2 \
-		--eval.n_episodes=1 \
-		--eval.batch_size=1 \
-		--save_checkpoint=true \
-		--save_freq=2 \
-		--log_freq=1 \
-		--wandb.enable=false \
-		--output_dir=tests/outputs/diffusion/
-
-test-diffusion-ete-eval:
-	lerobot-eval \
-		--policy.path=tests/outputs/diffusion/checkpoints/000002/pretrained_model \
-		--policy.device=$(DEVICE) \
-		--env.type=pusht \
-		--env.episode_length=5 \
-		--eval.n_episodes=1 \
-		--eval.batch_size=1
-
-test-tdmpc-ete-train:
-	lerobot-train \
-		--policy.type=tdmpc \
-		--policy.device=$(DEVICE) \
-		--policy.push_to_hub=false \
-		--env.type=pusht \
-		--env.episode_length=5 \
-		--dataset.repo_id=lerobot/pusht_image \
-		--dataset.image_transforms.enable=true \
-		--dataset.episodes="[0]" \
-		--batch_size=2 \
-		--steps=2 \
-		--eval_freq=2 \
-		--eval.n_episodes=1 \
-		--eval.batch_size=1 \
-		--save_checkpoint=true \
-		--save_freq=2 \
-		--log_freq=1 \
-		--wandb.enable=false \
-		--output_dir=tests/outputs/tdmpc/
-
-test-tdmpc-ete-eval:
-	lerobot-eval \
-		--policy.path=tests/outputs/tdmpc/checkpoints/000002/pretrained_model \
-		--policy.device=$(DEVICE) \
-		--env.type=pusht \
-		--env.episode_length=5 \
-		--env.observation_height=96 \
-        --env.observation_width=96 \
-		--eval.n_episodes=1 \
-		--eval.batch_size=1
-
-
-test-smolvla-ete-train:
-	lerobot-train \
-		--policy.type=smolvla \
-		--policy.n_action_steps=20 \
-		--policy.chunk_size=20 \
-		--policy.device=$(DEVICE) \
-		--policy.push_to_hub=false \
-		--env.type=aloha \
-		--env.episode_length=5 \
-		--dataset.repo_id=lerobot/aloha_sim_transfer_cube_human \
-		--dataset.image_transforms.enable=true \
-		--dataset.episodes="[0]" \
-		--batch_size=2 \
-		--steps=4 \
-		--eval_freq=2 \
-		--eval.n_episodes=1 \
-		--eval.batch_size=1 \
-		--save_freq=2 \
-		--save_checkpoint=true \
-		--log_freq=1 \
-		--wandb.enable=false \
-		--output_dir=tests/outputs/smolvla/
-
-test-smolvla-ete-eval:
-	lerobot-eval \
-		--policy.path=tests/outputs/smolvla/checkpoints/000004/pretrained_model \
-		--policy.device=$(DEVICE) \
-		--env.type=aloha \
-		--env.episode_length=5 \
-		--eval.n_episodes=1 \
-		--eval.batch_size=1
+smoke:
+	python3 -m py_compile \
+		ros2_ws/src/nb_voice_stt/nb_voice_stt/*.py \
+		ros2_ws/src/zeri_base/zeri_base/*.py \
+		ros2_ws/src/zeri_bringup/zeri_bringup/*.py \
+		ros2_ws/src/zeri_camera/zeri_camera/*.py \
+		ros2_ws/src/zeri_lidar/zeri_lidar/*.py \
+		ros2_ws/src/zeri_voice/zeri_voice/*.py \
+		src/lerobot/vlm_agent/*.py \
+		src/lerobot/configs/train.py \
+		src/lerobot/scripts/lerobot_train.py \
+		src/lerobot/scripts/lerobot_rollout.py \
+		src/lerobot/policies/factory.py \
+		src/lerobot/policies/__init__.py \
+		src/lerobot/policies/pretrained.py \
+		src/lerobot/policies/pi0/modeling_pi0.py \
+		src/lerobot/policies/pi05/modeling_pi05.py \
+		src/lerobot/processor/newline_task_processor.py \
+		src/lerobot/data_processing/__init__.py \
+		src/lerobot/async_inference/helpers.py \
+		src/lerobot/async_inference/constants.py \
+		src/lerobot/utils/import_utils.py
+	python3 -c 'from pathlib import Path; import tomllib; import xml.etree.ElementTree as ET; tomllib.load(open("pyproject.toml", "rb")); [ET.parse(p) for p in sorted(Path("ros2_ws/src").glob("*/package.xml"))]; print("metadata ok")'
+	bash -n source_zeri.sh source_zeri_vlm.sh scripts/*.sh
+	git diff --check

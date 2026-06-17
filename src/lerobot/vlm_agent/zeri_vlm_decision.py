@@ -122,6 +122,19 @@ def infer_task_from_text(raw_text: str) -> Optional[str]:
         "gas",
     ]
 
+    water_keywords = [
+        "목마",
+        "갈증",
+        "물 줘",
+        "물좀",
+        "물 좀",
+        "마실",
+        "생수",
+        "water",
+        "drink",
+        "thirst",
+    ]
+
     radio_keywords = [
         "무전",
         "연락",
@@ -139,6 +152,9 @@ def infer_task_from_text(raw_text: str) -> Optional[str]:
 
     if any(keyword in text for keyword in oxygen_keywords):
         return "oxygen_mask_delivery"
+
+    if any(keyword in text for keyword in water_keywords):
+        return "water_delivery"
 
     if any(keyword in text for keyword in radio_keywords):
         return "radio_delivery"
@@ -158,6 +174,9 @@ def resolve_led_cmd_from_fields(
 
     if task == "oxygen_mask_delivery":
         return LED_RED
+
+    if task == "water_delivery":
+        return LED_GREEN
 
     if task == "radio_delivery":
         return LED_BLUE
@@ -184,6 +203,9 @@ def resolve_led_cmd_from_fields(
 
 
 def default_instruction_for_task(selected_task: str) -> str:
+    if selected_task == "water_delivery":
+        return "Deliver the water bottle to the person."
+
     if selected_task == "oxygen_mask_delivery":
         return "Deliver the oxygen mask to the person."
 
@@ -252,6 +274,14 @@ def normalize_decision(
                 hazard_level = "critical"
             if scene_status == "unknown":
                 scene_status = "respiratory_distress"
+
+        elif selected_task == "water_delivery":
+            vla_required = True
+            vla_instruction = vla_instruction or default_instruction_for_task(selected_task)
+            mission_state = MISSION_RUN_VLA
+            nav_intent = "hold_position"
+            if scene_status == "unknown":
+                scene_status = "needs_water"
 
         elif selected_task == "radio_delivery":
             vla_required = True
@@ -352,6 +382,22 @@ def normalize_decision(
                 report_to_base=True,
             )
 
+        if fallback_task == "water_delivery":
+            return build_decision(
+                mission_state=MISSION_RUN_VLA,
+                hazard_level="normal",
+                scene_status="needs_water",
+                selected_task="water_delivery",
+                nav_intent="hold_position",
+                need_oxygen_mask=False,
+                confidence=0.50,
+                led_cmd=LED_GREEN,
+                reason="VLM JSON parsing failed, but STT text indicates a water request.",
+                robot_speech="물 요청으로 판단했습니다. 물 전달을 준비하겠습니다.",
+                vla_required=True,
+                vla_instruction=default_instruction_for_task("water_delivery"),
+            )
+
         if fallback_task == "radio_delivery":
             return build_decision(
                 mission_state=MISSION_RUN_VLA,
@@ -420,6 +466,12 @@ def normalize_decision(
         hazard_level = "critical"
         need_oxygen_mask = True
 
+    elif inferred_task == "water_delivery" and selected_task not in SUPPORTED_VLA_TASKS:
+        selected_task = "water_delivery"
+        scene_status = "needs_water"
+        if hazard_level == "normal":
+            hazard_level = "normal"
+
     elif inferred_task == "radio_delivery" and selected_task not in SUPPORTED_VLA_TASKS:
         selected_task = "radio_delivery"
         scene_status = "needs_communication"
@@ -460,6 +512,8 @@ def normalize_decision(
     if not robot_speech:
         if selected_task == "oxygen_mask_delivery":
             robot_speech = "호흡곤란으로 판단했습니다. 산소 마스크 전달을 준비하겠습니다."
+        elif selected_task == "water_delivery":
+            robot_speech = "물 요청으로 판단했습니다. 물 전달을 준비하겠습니다."
         elif selected_task == "radio_delivery":
             robot_speech = "구조대와의 통신이 필요하다고 판단했습니다. 무전기 전달을 준비하겠습니다."
         elif selected_task == "status_check":

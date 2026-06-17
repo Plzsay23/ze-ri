@@ -110,7 +110,8 @@ start_node "04_lidar_depth_guard" \
     -p stop_distance:=0.55 \
     -p clear_distance:=0.85 \
     -p side_min_clearance:=0.45 \
-    -p avoid_lateral_speed:=0.20 \
+    -p enable_lateral_avoidance:=false \
+    -p avoid_lateral_speed:=0.0 \
     -p avoid_min_time_sec:=0.7 \
     -p avoid_max_time_sec:=3.0 \
     -p left_is_positive_y:=true \
@@ -127,6 +128,9 @@ start_node "05_base_key_odom" \
     -p baudrate:=115200 \
     -p cmd_topic:=/cmd_vel \
     -p odom_topic:=/odom \
+    -p publish_open_loop_odom:=true \
+    -p odom_publish_hz:=20.0 \
+    -p encoder_timeout_sec:=0.30 \
     -p ticks_per_rev:=3464.0 \
     -p wheel_radius:=0.075 \
     -p lx:=0.1575 \

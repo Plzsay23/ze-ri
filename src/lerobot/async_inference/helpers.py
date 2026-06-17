@@ -30,7 +30,6 @@ from lerobot.policies import (  # noqa: F401
     DiffusionConfig,
     PI0Config,
     PI05Config,
-    SmolVLAConfig,
     VQBeTConfig,
 )
 from lerobot.robots.robot import Robot

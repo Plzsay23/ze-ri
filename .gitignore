@@ -175,6 +175,7 @@ outputs/
 .cache/*
 *.urdf
 *.xml
+!**/package.xml
 *.part
 
 # ROS2 build artifacts

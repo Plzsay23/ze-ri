@@ -19,9 +19,7 @@ from lerobot.configs import PipelineFeatureType, PolicyFeature
 from .pipeline import ComplementaryDataProcessorStep, ProcessorStepRegistry
 
 
-# NOTE: The registry name "smolvla_new_line_processor" is kept for backward compatibility
-# with serialized processor configs that reference this name.
-@ProcessorStepRegistry.register(name="smolvla_new_line_processor")
+@ProcessorStepRegistry.register(name="task_new_line_processor")
 class NewLineTaskProcessorStep(ComplementaryDataProcessorStep):
     """
     A processor step that ensures the 'task' description ends with a newline character.

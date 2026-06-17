@@ -44,6 +44,7 @@ LED_NAME_MAP = {
 }
 
 SUPPORTED_VLA_TASKS = {
+    "water_delivery",
     "oxygen_mask_delivery",
     "radio_delivery",
 }
@@ -51,6 +52,7 @@ SUPPORTED_VLA_TASKS = {
 VALID_TASKS = {
     "idle",
     "status_check",
+    "water_delivery",
     "oxygen_mask_delivery",
     "radio_delivery",
     "call_rescue",
@@ -80,16 +82,19 @@ SYSTEM_PROMPT = """
 - 실제 VLA 실행은 별도 executor가 수행한다.
 - VLA handoff 확인 단계에서는 손목 카메라 마지막 프레임을 보고 그리퍼 안의 물체가 사라졌는지 판단한다.
 
-현재 사용 가능한 ACT VLA task는 정확히 두 개뿐이다:
-1. oxygen_mask_delivery
+현재 사용 가능한 ACT VLA task는 정확히 세 개다:
+1. water_delivery
+   - 물 전달
+2. oxygen_mask_delivery
    - 산소마스크 전달
-2. radio_delivery
+3. radio_delivery
    - 무전기 전달
 
-이 두 task 외에는 VLA를 실행하면 안 된다.
+이 세 task 외에는 VLA를 실행하면 안 된다.
 그 외 상황은 idle, status_check, call_rescue 중 하나로 판단한다.
 
 상황 판단 기준:
+- "목마르다", "물이 필요하다", "마실 것이 필요하다" 등은 물 전달 필요.
 - "숨쉬기 힘들다", "숨을 못 쉬겠다", "산소가 필요하다", "질식할 것 같다",
   "가스 냄새가 난다", "연기 때문에 숨을 못 쉬겠다" 등은 산소마스크 전달 필요.
 - 장면에 사람이 있고 연기/화재/유독가스 위험이 추정되면 산소마스크 전달 필요.
@@ -113,7 +118,7 @@ LED command rule:
 {
   "hazard_level": "normal|caution|urgent|critical|danger",
   "scene_status": "normal|respiratory_distress|needs_communication|no_response|fire_nearby|smoke_or_gas|blocked_path|unknown",
-  "selected_task": "idle|status_check|oxygen_mask_delivery|radio_delivery|call_rescue",
+  "selected_task": "idle|status_check|water_delivery|oxygen_mask_delivery|radio_delivery|call_rescue",
   "nav_intent": "stop|hold_position|rotate_search|approach_person|follow_voice|retreat|go_to_safe_zone",
   "vla_required": true,
   "vla_instruction": "Deliver the oxygen mask to the person.",
@@ -127,6 +132,10 @@ LED command rule:
 }
 
 규칙:
+- selected_task가 water_delivery이면:
+  - vla_required = true
+  - vla_instruction = "Deliver the water bottle to the person."
+  - led_cmd = 2 또는 5
 - selected_task가 oxygen_mask_delivery이면:
   - vla_required = true
   - vla_instruction = "Deliver the oxygen mask to the person."
@@ -149,7 +158,7 @@ USER_PROMPT_TEMPLATE = """
 현재 카메라 장면과 STT 텍스트를 보고 재난 상황을 판단해라.
 
 이번 단계에서는 ACT 기반 VLA task 실행까지 연동한다.
-단, 실제 실행 가능한 VLA task는 oxygen_mask_delivery, radio_delivery 두 개뿐이다.
+단, 실제 실행 가능한 VLA task는 water_delivery, oxygen_mask_delivery, radio_delivery 세 개뿐이다.
 
 STT 텍스트:
 "{stt_text}"
@@ -264,6 +273,19 @@ def infer_task_from_text(raw_text: str) -> Optional[str]:
         "gas",
     ]
 
+    water_keywords = [
+        "목마",
+        "갈증",
+        "물 줘",
+        "물좀",
+        "물 좀",
+        "마실",
+        "생수",
+        "water",
+        "drink",
+        "thirst",
+    ]
+
     radio_keywords = [
         "무전",
         "연락",
@@ -281,6 +303,9 @@ def infer_task_from_text(raw_text: str) -> Optional[str]:
 
     if any(keyword in text for keyword in oxygen_keywords):
         return "oxygen_mask_delivery"
+
+    if any(keyword in text for keyword in water_keywords):
+        return "water_delivery"
 
     if any(keyword in text for keyword in radio_keywords):
         return "radio_delivery"
@@ -300,6 +325,9 @@ def resolve_led_cmd_from_fields(
 
     if task == "oxygen_mask_delivery":
         return LED_RED
+
+    if task == "water_delivery":
+        return LED_GREEN
 
     if task == "radio_delivery":
         return LED_BLUE
@@ -326,6 +354,9 @@ def resolve_led_cmd_from_fields(
 
 
 def default_instruction_for_task(selected_task: str) -> str:
+    if selected_task == "water_delivery":
+        return "Deliver the water bottle to the person."
+
     if selected_task == "oxygen_mask_delivery":
         return "Deliver the oxygen mask to the person."
 
@@ -357,6 +388,23 @@ def normalize_decision(
                 robot_speech="호흡곤란으로 판단했습니다. 산소 마스크 전달을 준비하겠습니다.",
                 vla_required=True,
                 vla_instruction=default_instruction_for_task("oxygen_mask_delivery"),
+                task_duration_sec=default_task_duration_sec,
+                raw_text=raw_text,
+            )
+
+        if fallback_task == "water_delivery":
+            return VLMDecision(
+                hazard_level="normal",
+                scene_status="needs_water",
+                selected_task="water_delivery",
+                nav_intent="hold_position",
+                need_oxygen_mask=False,
+                confidence=0.50,
+                led_cmd=LED_GREEN,
+                reason="VLM JSON parsing failed, but STT text indicates a water request.",
+                robot_speech="물 요청으로 판단했습니다. 물 전달을 준비하겠습니다.",
+                vla_required=True,
+                vla_instruction=default_instruction_for_task("water_delivery"),
                 task_duration_sec=default_task_duration_sec,
                 raw_text=raw_text,
             )
@@ -420,6 +468,10 @@ def normalize_decision(
         hazard_level = "critical"
         need_oxygen_mask = True
 
+    elif inferred_task == "water_delivery" and selected_task not in SUPPORTED_VLA_TASKS:
+        selected_task = "water_delivery"
+        scene_status = "needs_water"
+
     elif inferred_task == "radio_delivery" and selected_task not in SUPPORTED_VLA_TASKS:
         selected_task = "radio_delivery"
         scene_status = "needs_communication"
@@ -432,6 +484,11 @@ def normalize_decision(
             scene_status = "respiratory_distress"
         if hazard_level not in {"critical", "danger", "urgent"}:
             hazard_level = "critical"
+
+    elif selected_task == "water_delivery":
+        vla_required = True
+        if scene_status == "unknown":
+            scene_status = "needs_water"
 
     elif selected_task == "radio_delivery":
         vla_required = True
@@ -474,6 +531,8 @@ def normalize_decision(
     if not robot_speech:
         if selected_task == "oxygen_mask_delivery":
             robot_speech = "호흡곤란으로 판단했습니다. 산소 마스크 전달을 준비하겠습니다."
+        elif selected_task == "water_delivery":
+            robot_speech = "물 요청으로 판단했습니다. 물 전달을 준비하겠습니다."
         elif selected_task == "radio_delivery":
             robot_speech = "구조대와의 통신이 필요하다고 판단했습니다. 무전기 전달을 준비하겠습니다."
         elif selected_task == "status_check":
@@ -696,7 +755,12 @@ def _normalize_handoff_result(parsed: Optional[Dict[str, Any]], raw_text: str) -
 
 
 def _qwen_verify_handoff(self: QwenVLMRunner, image: PILImage.Image, *, selected_task: str, arm: str) -> Dict[str, Any]:
-    task_name = "oxygen mask" if selected_task == "oxygen_mask_delivery" else "walkie talkie/radio"
+    task_name_map = {
+        "water_delivery": "water bottle",
+        "oxygen_mask_delivery": "oxygen mask",
+        "radio_delivery": "walkie talkie/radio",
+    }
+    task_name = task_name_map.get(selected_task, "delivered item")
     prompt = f"""
 This is the final wrist-camera frame after a robot VLA handoff motion.
 The robot used its {arm} arm to hand over a {task_name}.

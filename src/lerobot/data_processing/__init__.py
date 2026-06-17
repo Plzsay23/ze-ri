@@ -12,12 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Data processing utilities (annotation tools, dataset transformations).
-
-Available sub-modules (import directly)::
-
-    from lerobot.data_processing.sarm_annotations import ...
-"""
+"""Data processing utilities for dataset transformations."""
 
 __all__: list[str] = []
