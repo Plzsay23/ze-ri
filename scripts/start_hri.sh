@@ -16,6 +16,9 @@ ZERI_ROOT="${ZERI_ROOT:-$HOME/ze-ri}"
 SOURCE_FILE="${SOURCE_FILE:-$ZERI_ROOT/source_zeri.sh}"
 APP_VENV="${APP_VENV:-$ZERI_ROOT/.venv}"
 STT_VENV="${STT_VENV:-$ZERI_ROOT/.venv_stt}"
+APP_PYTHON="${APP_PYTHON:-$APP_VENV/bin/python}"
+STT_PYTHON="${STT_PYTHON:-$STT_VENV/bin/python}"
+STT_NODE_FILE="${STT_NODE_FILE:-$ZERI_ROOT/ros2_ws/src/nb_voice_stt/nb_voice_stt/stt_node.py}"
 
 LOG_DIR="${LOG_DIR:-$ZERI_ROOT/logs/stt_tts_vlm_$(date +%Y%m%d_%H%M%S)}"
 mkdir -p "$LOG_DIR"
@@ -38,6 +41,9 @@ DEPTH_TOPIC="${DEPTH_TOPIC:-/camera/camera/aligned_depth_to_color/image_raw}"
 STT_TOPIC="${STT_TOPIC:-/stt/text}"
 ROBOT_SPEECH_TOPIC="${ROBOT_SPEECH_TOPIC:-/zeri/vlm/robot_speech}"
 TTS_STATUS_TOPIC="${TTS_STATUS_TOPIC:-/zeri/tts/status}"
+MISSION_EVENT_TOPIC="${MISSION_EVENT_TOPIC:-/zeri/mission/event}"
+BEHAVIOR_COMMAND_TOPIC="${BEHAVIOR_COMMAND_TOPIC:-/zeri/behavior/command}"
+COMPLETE_BEHAVIOR_ON_VLA_SUCCESS="${COMPLETE_BEHAVIOR_ON_VLA_SUCCESS:-true}"
 
 VLA_TIMEOUT_SEC="${VLA_TIMEOUT_SEC:-60.0}"
 VLA_TASK_DURATION_SEC="${VLA_TASK_DURATION_SEC:-20.0}"
@@ -106,12 +112,16 @@ start_bg() {
 cd "$ZERI_ROOT"
 source_common
 
-if [[ ! -d "$APP_VENV" ]]; then
-  echo "[ERROR] app venv not found: $APP_VENV" >&2
+if [[ ! -x "$APP_PYTHON" ]]; then
+  echo "[ERROR] app python not found or not executable: $APP_PYTHON" >&2
   exit 1
 fi
-if [[ ! -d "$STT_VENV" ]]; then
-  echo "[ERROR] STT venv not found: $STT_VENV" >&2
+if [[ ! -x "$STT_PYTHON" ]]; then
+  echo "[ERROR] STT python not found or not executable: $STT_PYTHON" >&2
+  exit 1
+fi
+if [[ ! -f "$STT_NODE_FILE" ]]; then
+  echo "[ERROR] STT node file not found: $STT_NODE_FILE" >&2
   exit 1
 fi
 if [[ ! -d "$STT_MODEL_DIR" ]]; then
@@ -131,26 +141,47 @@ elif command -v pactl >/dev/null 2>&1; then
 fi
 
 start_bg tts_edge_node \
-  bash -lc "cd '$ZERI_ROOT' && source '$SOURCE_FILE' && source '$APP_VENV/bin/activate' && exec python3 src/lerobot/vlm_agent/tts_edge_node.py"
+  bash -lc "cd '$ZERI_ROOT' && \
+    set +u && source '$SOURCE_FILE' && source '$APP_VENV/bin/activate' && set -u && \
+    exec '$APP_PYTHON' src/lerobot/vlm_agent/tts_edge_node.py"
 
 sleep 1
 
 start_bg stt_node \
-  bash -lc "cd '$ZERI_ROOT' && source '$SOURCE_FILE' && source '$STT_VENV/bin/activate' && exec ros2 launch nb_voice_stt stt.launch.py model_dir:='$STT_MODEL_DIR' audio_device:='$STT_AUDIO_DEVICE' channels:='$STT_CHANNELS' use_channel_index:='$STT_USE_CHANNEL_INDEX' sample_rate:='$STT_SAMPLE_RATE' device:='$STT_DEVICE'"
+  bash -lc "cd '$ZERI_ROOT' && \
+    set +u && \
+    source '$SOURCE_FILE' && \
+    if declare -F deactivate >/dev/null 2>&1; then deactivate || true; fi && \
+    source '$STT_VENV/bin/activate' && \
+    set -u && \
+    export PYTHONPATH='$ZERI_ROOT/ros2_ws/src/nb_voice_stt':\"\${PYTHONPATH:-}\" && \
+    exec '$STT_PYTHON' '$STT_NODE_FILE' --ros-args \
+      -r __node:=sensevoice_stt_node \
+      -p model_dir:='$STT_MODEL_DIR' \
+      -p audio_device:='$STT_AUDIO_DEVICE' \
+      -p channels:='$STT_CHANNELS' \
+      -p use_channel_index:='$STT_USE_CHANNEL_INDEX' \
+      -p sample_rate:='$STT_SAMPLE_RATE' \
+      -p device:='$STT_DEVICE'"
 
 sleep 2
 
 start_bg vlm_stt_bridge_node \
-  bash -lc "cd '$ZERI_ROOT' && source '$SOURCE_FILE' && source '$APP_VENV/bin/activate' && exec python3 src/lerobot/vlm_agent/vlm_stt_bridge_node.py --ros-args \
+  bash -lc "cd '$ZERI_ROOT' && \
+    set +u && source '$SOURCE_FILE' && source '$APP_VENV/bin/activate' && set -u && \
+    exec '$APP_PYTHON' src/lerobot/vlm_agent/vlm_stt_bridge_node.py --ros-args \
     -p rgb_topic:='$RGB_TOPIC' \
     -p depth_topic:='$DEPTH_TOPIC' \
     -p stt_topic:='$STT_TOPIC' \
     -p robot_speech_topic:='$ROBOT_SPEECH_TOPIC' \
     -p tts_status_topic:='$TTS_STATUS_TOPIC' \
+    -p mission_event_topic:='$MISSION_EVENT_TOPIC' \
+    -p behavior_command_topic:='$BEHAVIOR_COMMAND_TOPIC' \
     -p stt_gate_mode:='$STT_GATE_MODE' \
     -p use_vad_gate:='$USE_VAD_GATE' \
     -p enable_vla:='$ENABLE_VLA' \
     -p enable_mission_events:='$ENABLE_MISSION_EVENTS' \
+    -p complete_behavior_on_vla_success:='$COMPLETE_BEHAVIOR_ON_VLA_SUCCESS' \
     -p vla_timeout_sec:='$VLA_TIMEOUT_SEC' \
     -p vla_default_task_duration_sec:='$VLA_TASK_DURATION_SEC' \
     -p left_wrist_snapshot_topic:='$LEFT_WRIST_SNAPSHOT_TOPIC' \
@@ -170,6 +201,8 @@ echo
 echo "Monitor:"
 echo "  ros2 topic echo /stt/text"
 echo "  ros2 topic echo /zeri/vlm/decision"
+echo "  ros2 topic echo /zeri/mission/event"
+echo "  ros2 topic echo /zeri/behavior/command"
 echo "  ros2 topic echo /zeri/vla/status"
 echo "  ros2 topic hz /zeri/vla/left/wrist_snapshot"
 echo "  ros2 topic hz /zeri/vla/right/wrist_snapshot"

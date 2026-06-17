@@ -29,7 +29,7 @@ INDEX_HTML = r"""
 <html lang="ko">
 <head>
   <meta charset="utf-8" />
-  <title>Ze-Ri ROS2 Autonomy / VLA Dashboard</title>
+  <title>Ze-Ri ROS2 Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <style>
@@ -273,7 +273,7 @@ INDEX_HTML = r"""
       grid-template-rows: minmax(0, 58fr) minmax(0, 42fr);
       grid-template-areas:
         "rgb rgb rgb rgb rgb rgb rgb depth depth depth depth depth depth depth"
-        "map map map voice voice voice voice base base base arm arm arm arm";
+        "map map map voice voice voice leftcam leftcam leftcam leftcam rightcam rightcam rightcam rightcam";
       gap: 10px;
       padding: 10px;
       margin: 0;
@@ -310,8 +310,8 @@ INDEX_HTML = r"""
     .depth-card { grid-area: depth; }
     .text-card { grid-area: voice; }
     .map-card { grid-area: map; }
-    .base-card { grid-area: base; }
-    .arm-card { grid-area: arm; }
+    .leftcam-card { grid-area: leftcam; }
+    .rightcam-card { grid-area: rightcam; }
 
     .card-title {
       height: 38px;
@@ -377,7 +377,9 @@ INDEX_HTML = r"""
       background: #020617;
     }
 
-    .rgb-card .media-wrap img {
+    .rgb-card .media-wrap img,
+    .leftcam-card .media-wrap img,
+    .rightcam-card .media-wrap img {
       object-fit: cover;
     }
 
@@ -434,7 +436,7 @@ INDEX_HTML = r"""
       background: linear-gradient(135deg, rgba(2, 6, 23, 0.8), rgba(15, 23, 42, 0.55));
     }
 
-    .text-panel, .status-big {
+    .text-panel {
       flex: 1 1 auto;
       min-height: 0;
       padding: 9px;
@@ -442,18 +444,14 @@ INDEX_HTML = r"""
       background: rgba(2, 6, 23, 0.18);
     }
 
-    .text-panel::-webkit-scrollbar,
-    .status-big::-webkit-scrollbar,
-    .status-line::-webkit-scrollbar { width: 8px; height: 8px; }
+    .text-panel::-webkit-scrollbar { width: 8px; height: 8px; }
 
-    .text-panel::-webkit-scrollbar-thumb,
-    .status-big::-webkit-scrollbar-thumb,
-    .status-line::-webkit-scrollbar-thumb {
+    .text-panel::-webkit-scrollbar-thumb {
       background: rgba(96, 165, 250, 0.28);
       border-radius: 999px;
     }
 
-    .metric, .status-line {
+    .metric {
       margin-bottom: 8px;
       padding: 9px 10px;
       background: rgba(15, 23, 42, 0.58);
@@ -462,14 +460,14 @@ INDEX_HTML = r"""
       box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
     }
 
-    .metric:last-child, .status-line:last-child { margin-bottom: 0; }
+    .metric:last-child { margin-bottom: 0; }
 
     .metric.primary {
       background: linear-gradient(135deg, rgba(14, 165, 233, 0.18), rgba(15, 23, 42, 0.58));
       border-color: rgba(56, 189, 248, 0.28);
     }
 
-    .metric-label, .status-line .label {
+    .metric-label {
       color: #93c5fd;
       font-size: 10px;
       font-weight: 950;
@@ -478,7 +476,7 @@ INDEX_HTML = r"""
       margin-bottom: 5px;
     }
 
-    .metric-value, .status-line .value {
+    .metric-value {
       color: #f8fafc;
       font-size: 13px;
       line-height: 1.28;
@@ -488,20 +486,15 @@ INDEX_HTML = r"""
       overflow-wrap: anywhere;
     }
 
-    .metric-value.small, .status-line .value {
-      font-size: 11px;
-      line-height: 1.27;
+    .metric-value.small {
+      font-size: 12px;
+      line-height: 1.28;
       font-weight: 760;
-    }
-
-    .status-big {
-      display: grid;
-      grid-template-columns: 1fr;
-      align-content: start;
     }
 
     @media (max-width: 1280px) {
       body { overflow-y: auto; }
+
       .topbar {
         height: auto;
         min-height: 58px;
@@ -510,8 +503,17 @@ INDEX_HTML = r"""
         flex-direction: column;
         padding: 10px 12px;
       }
-      .top-status { justify-content: flex-start; flex-wrap: wrap; }
-      .clock { text-align: left; min-width: 0; }
+
+      .top-status {
+        justify-content: flex-start;
+        flex-wrap: wrap;
+      }
+
+      .clock {
+        text-align: left;
+        min-width: 0;
+      }
+
       .mission-bar {
         height: auto;
         min-height: 58px;
@@ -519,14 +521,28 @@ INDEX_HTML = r"""
         align-items: flex-start;
         padding: 10px;
       }
-      .mission-left { flex-wrap: wrap; }
-      .mission-metrics { flex-wrap: wrap; justify-content: flex-start; }
+
+      .mission-left {
+        flex-wrap: wrap;
+      }
+
+      .mission-metrics {
+        flex-wrap: wrap;
+        justify-content: flex-start;
+      }
+
       .grid {
         height: auto;
         min-height: calc(100vh - 118px);
         grid-template-columns: 1fr;
-        grid-template-rows: 420px 420px 320px 360px 320px 340px;
-        grid-template-areas: "rgb" "depth" "map" "voice" "base" "arm";
+        grid-template-rows: 420px 420px 320px 300px 360px 360px;
+        grid-template-areas:
+          "rgb"
+          "depth"
+          "map"
+          "voice"
+          "leftcam"
+          "rightcam";
       }
     }
   </style>
@@ -540,12 +556,25 @@ INDEX_HTML = r"""
     </div>
 
     <div class="top-status">
-      <div id="chip-ws" class="status-chip bad"><span id="ws-dot" class="dot"></span><span id="ws-state">DISCONNECTED</span></div>
-      <div id="chip-rgb" class="status-chip bad"><span class="chip-dot"></span><span>RGB</span><b>WAIT</b></div>
-      <div id="chip-pc" class="status-chip bad"><span class="chip-dot"></span><span>3D</span><b>WAIT</b></div>
-      <div id="chip-map" class="status-chip bad"><span class="chip-dot"></span><span>SLAM</span><b>WAIT</b></div>
-      <div id="chip-base" class="status-chip bad"><span class="chip-dot"></span><span>BASE</span><b>WAIT</b></div>
-      <div id="chip-vla" class="status-chip bad"><span class="chip-dot"></span><span>VLA</span><b>WAIT</b></div>
+      <div id="chip-ws" class="status-chip bad">
+        <span id="ws-dot" class="dot"></span>
+        <span id="ws-state">DISCONNECTED</span>
+      </div>
+      <div id="chip-rgb" class="status-chip bad">
+        <span class="chip-dot"></span><span>RGB</span><b>WAIT</b>
+      </div>
+      <div id="chip-pc" class="status-chip bad">
+        <span class="chip-dot"></span><span>3D</span><b>WAIT</b>
+      </div>
+      <div id="chip-map" class="status-chip bad">
+        <span class="chip-dot"></span><span>SLAM</span><b>WAIT</b>
+      </div>
+      <div id="chip-leftcam" class="status-chip bad">
+        <span class="chip-dot"></span><span>LEFT CAM</span><b>WAIT</b>
+      </div>
+      <div id="chip-rightcam" class="status-chip bad">
+        <span class="chip-dot"></span><span>RIGHT CAM</span><b>WAIT</b>
+      </div>
       <div id="clock" class="clock">-</div>
     </div>
   </header>
@@ -573,7 +602,7 @@ INDEX_HTML = r"""
       <div class="media-wrap">
         <img id="rgb-img" alt="RGB Stream" style="display:none" />
         <div id="rgb-placeholder" class="placeholder">RGB 데이터 대기중</div>
-        <div id="rgb-overlay" class="overlay-pill">camera/color/image_raw</div>
+        <div id="rgb-overlay" class="overlay-pill">/zeri/vlm/input_rgb</div>
       </div>
     </section>
 
@@ -605,7 +634,7 @@ INDEX_HTML = r"""
 
     <section class="card text-card">
       <div class="card-title">
-        <span>Voice / VLM</span>
+        <span>STT / TTS / Model</span>
         <small id="vlm-ts">대기중</small>
       </div>
       <div class="text-panel">
@@ -618,67 +647,33 @@ INDEX_HTML = r"""
           <div id="robot-speech" class="metric-value">대기중</div>
         </div>
         <div class="metric">
-          <div class="metric-label">VLM 상태</div>
-          <div id="vlm-status" class="metric-value small">대기중</div>
-        </div>
-        <div class="metric">
-          <div class="metric-label">VLM 판단값</div>
-          <div id="vlm-output" class="metric-value small">대기중</div>
-        </div>
-        <div class="metric">
-          <div class="metric-label">판단 근거</div>
-          <div id="vlm-reason" class="metric-value small">대기중</div>
+          <div class="metric-label">실행 모델</div>
+          <div id="executed-model" class="metric-value small">대기중</div>
         </div>
       </div>
     </section>
 
-    <section class="card base-card">
+    <section class="card leftcam-card">
       <div class="card-title">
-        <span>Autonomy / Safety</span>
-        <small id="base-ts">대기중</small>
+        <span>Left Arm Camera</span>
+        <small id="leftcam-ts">대기중</small>
       </div>
-      <div class="status-big">
-        <div class="status-line">
-          <div class="label">Person Follow</div>
-          <div id="person-follow-state" class="value">데이터 대기중</div>
-        </div>
-        <div class="status-line">
-          <div class="label">LiDAR + Depth Safety Guard</div>
-          <div id="safety-guard-state" class="value">데이터 대기중</div>
-        </div>
-        <div class="status-line">
-          <div class="label">cmd_vel_raw → cmd_vel</div>
-          <div id="cmd-state" class="value">데이터 대기중</div>
-        </div>
-        <div class="status-line">
-          <div class="label">Scan / Odom</div>
-          <div id="nav-state" class="value">데이터 대기중</div>
-        </div>
+      <div class="media-wrap">
+        <img id="left-arm-camera-img" alt="Left Arm Camera" style="display:none" />
+        <div id="left-arm-camera-placeholder" class="placeholder">왼팔 카메라 데이터 대기중</div>
+        <div id="leftcam-overlay" class="overlay-pill">/zeri/vla/left/handoff_image</div>
       </div>
     </section>
 
-    <section class="card arm-card">
+    <section class="card rightcam-card">
       <div class="card-title">
-        <span>VLA / Robot Arms</span>
-        <small id="arm-ts">대기중</small>
+        <span>Right Arm Camera</span>
+        <small id="rightcam-ts">대기중</small>
       </div>
-      <div class="status-big">
-        <div class="status-line">
-          <div class="label">VLA Router</div>
-          <div id="vla-status" class="value">데이터 대기중</div>
-        </div>
-        <div class="status-line">
-          <div class="label">Left Arm</div>
-          <div id="vla-left-status" class="value">데이터 대기중</div>
-        </div>
-        <div class="status-line">
-          <div class="label">Right Arm</div>
-          <div id="vla-right-status" class="value">데이터 대기중</div>
-        </div>
-        <div class="status-line">
-          <div class="label">Last Task Request / Legacy Arm Status</div>
-          <div id="arm-status" class="value">데이터 대기중</div>
-        </div>
+      <div class="media-wrap">
+        <img id="right-arm-camera-img" alt="Right Arm Camera" style="display:none" />
+        <div id="right-arm-camera-placeholder" class="placeholder">오른팔 카메라 데이터 대기중</div>
+        <div id="rightcam-overlay" class="overlay-pill">/zeri/vla/right/handoff_image</div>
       </div>
     </section>
   </main>
@@ -716,7 +711,6 @@ INDEX_HTML = r"""
       return String(v);
     }
 
-
     function isFresh(ts, maxAgeSec) {
       if (!ts) return false;
       return ((Date.now() / 1000.0) - ts) <= maxAgeSec;
@@ -739,39 +733,60 @@ INDEX_HTML = r"""
       if (b) b.textContent = detail;
     }
 
-    function hasUsefulText(v) {
-      const t = safeText(v, "").trim();
-      return t && t !== "데이터 대기중" && t !== "대기중" && t !== "-";
+    function pickExecutedModel(data) {
+      const d = data.vlm_decision || {};
+
+      const candidates = [
+        d.executed_model,
+        d.running_model,
+        d.model,
+        d.model_name,
+        d.policy_id,
+        d.policy_name,
+        d.adapter_id,
+        d.adapter_name,
+        d.selected_adapter,
+        d.selected_task,
+        data.vla_task_request,
+        data.vla_status,
+      ];
+
+      for (const v of candidates) {
+        const t = safeText(v, "").trim();
+        if (t && t !== "-" && t !== "대기중" && t !== "데이터 대기중") {
+          return t;
+        }
+      }
+
+      return "대기중";
     }
 
     function inferMissionState(data) {
       const ts = data.timestamps || {};
-      const safety = safeText(data.safety_guard_state, "").toLowerCase();
-      const person = safeText(data.person_follow_state, "").toLowerCase();
-      const vla = safeText(data.vla_status, "").toLowerCase();
       const vlm = safeText(data.inference_status, "").toLowerCase();
+      const vla = safeText(data.vla_status, "").toLowerCase();
+      const model = pickExecutedModel(data);
 
-      if (isFresh(ts.vla, 4) || /running|execute|active|busy|실행/.test(vla)) {
-        return ["VLA_RUNNING", "로봇팔 정책 실행 또는 라우터 상태 수신중"];
+      if (model && model !== "대기중") {
+        return ["MODEL_SELECTED", "VLM/VLA 실행 모델 정보 수신중"];
       }
-      if (/block|stop|obstacle|danger|guard|emergency|충돌|장애물|정지/.test(safety)) {
-        return ["SAFETY_GUARD", "LiDAR/Depth 안전 가드가 주행 명령을 감시중"];
+
+      if (/running|execute|active|busy|실행/.test(vla) || isFresh(ts.vla, 5)) {
+        return ["VLA_RUNNING", "정책 모델 실행 상태 수신중"];
       }
+
       if (/running|infer|processing|생성|추론/.test(vlm) || isFresh(ts.vlm, 3)) {
-        return ["VLM_DIALOG", "STT/VLM/TTS 대화 루프가 갱신중"];
+        return ["VLM_DIALOG", "STT/VLM/TTS 대화 루프 갱신중"];
       }
-      if (isFresh(ts.person, 3) || /track|follow|approach|person|사람|추종|접근/.test(person)) {
-        return ["PERSON_FOLLOW", "사람 추종 및 접근 주행 상태 수신중"];
-      }
-      if (isFresh(ts.cmd_out, 3) || isFresh(ts.odom, 3)) {
-        return ["BASE_ACTIVE", "베이스 주행 명령 또는 오도메트리 수신중"];
-      }
+
       if (isFresh(ts.rgb, 3) && isFresh(ts.pointcloud, 3) && isFresh(ts.map, 8)) {
-        return ["AUTONOMY_READY", "RGB·3D·SLAM 데이터가 정상 수신중"];
+        return ["AUTONOMY_READY", "RGB·3D·SLAM 데이터 정상 수신중"];
       }
+
       if (isFresh(ts.rgb, 3) || isFresh(ts.pointcloud, 3)) {
         return ["SENSOR_READY", "카메라/포인트클라우드 데이터 수신중"];
       }
+
       return ["BOOTING", "ROS 데이터 수신 대기중"];
     }
 
@@ -782,14 +797,14 @@ INDEX_HTML = r"""
       const rgbOk = isFresh(ts.rgb, 3);
       const pcOk = isFresh(ts.pointcloud, 3);
       const mapOk = isFresh(ts.map, 8);
-      const baseOk = isFresh(ts.safety, 3) || isFresh(ts.person, 3) || isFresh(ts.cmd_out, 3) || isFresh(ts.odom, 3);
-      const vlaOk = isFresh(ts.vla, 5) || isFresh(ts.vla_left, 5) || isFresh(ts.vla_right, 5);
+      const leftOk = isFresh(ts.left_arm_camera, 5);
+      const rightOk = isFresh(ts.right_arm_camera, 5);
 
       setChip("chip-rgb", rgbOk ? "ok" : "bad", rgbOk ? shortAge(ts.rgb) : "WAIT");
       setChip("chip-pc", pcOk ? "ok" : "bad", pcOk ? shortAge(ts.pointcloud) : "WAIT");
       setChip("chip-map", mapOk ? "ok" : "warn", mapOk ? shortAge(ts.map) : "WAIT");
-      setChip("chip-base", baseOk ? "ok" : "warn", baseOk ? shortAge(Math.max(ts.safety || 0, ts.person || 0, ts.cmd_out || 0, ts.odom || 0)) : "WAIT");
-      setChip("chip-vla", vlaOk ? "ok" : "warn", vlaOk ? shortAge(Math.max(ts.vla || 0, ts.vla_left || 0, ts.vla_right || 0)) : "WAIT");
+      setChip("chip-leftcam", leftOk ? "ok" : "warn", leftOk ? shortAge(ts.left_arm_camera) : "WAIT");
+      setChip("chip-rightcam", rightOk ? "ok" : "warn", rightOk ? shortAge(ts.right_arm_camera) : "WAIT");
 
       const [mission, desc] = inferMissionState(data);
       $("mission-state").textContent = mission;
@@ -803,10 +818,17 @@ INDEX_HTML = r"""
       $("pc-count").textContent = pcCount.toLocaleString();
       $("pc-overlay").textContent = `${pcCount.toLocaleString()} points`;
 
-      const lastTs = Math.max(ts.rgb || 0, ts.pointcloud || 0, ts.map || 0, ts.vlm || 0, ts.safety || 0, ts.vla || 0);
+      const lastTs = Math.max(
+        ts.rgb || 0,
+        ts.pointcloud || 0,
+        ts.map || 0,
+        ts.vlm || 0,
+        ts.stt || 0,
+        ts.left_arm_camera || 0,
+        ts.right_arm_camera || 0
+      );
       $("last-update").textContent = shortAge(lastTs);
     }
-
 
     const pcViewer = {
       canvas: null,
@@ -894,7 +916,11 @@ INDEX_HTML = r"""
     function initPointCloudViewer() {
       const canvas = $("pointcloud-canvas");
       if (!canvas) return;
-      const gl = canvas.getContext("webgl", { antialias: true, preserveDrawingBuffer: false });
+
+      const gl = canvas.getContext("webgl", {
+        antialias: true,
+        preserveDrawingBuffer: false,
+      });
 
       if (!gl) {
         $("pointcloud-placeholder").textContent = "이 브라우저는 WebGL을 지원하지 않습니다";
@@ -927,6 +953,7 @@ INDEX_HTML = r"""
       gl.attachShader(program, makeShader(gl, gl.VERTEX_SHADER, vs));
       gl.attachShader(program, makeShader(gl, gl.FRAGMENT_SHADER, fs));
       gl.linkProgram(program);
+
       if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
         throw new Error(gl.getProgramInfoLog(program) || "program link failed");
       }
@@ -938,6 +965,7 @@ INDEX_HTML = r"""
       pcViewer.colorBuffer = gl.createBuffer();
 
       canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
       canvas.addEventListener("mousedown", (e) => {
         pcViewer.dragging = true;
         pcViewer.dragButton = e.button;
@@ -945,16 +973,21 @@ INDEX_HTML = r"""
         pcViewer.lastY = e.clientY;
         canvas.classList.add("dragging");
       });
+
       window.addEventListener("mouseup", () => {
         pcViewer.dragging = false;
         canvas.classList.remove("dragging");
       });
+
       window.addEventListener("mousemove", (e) => {
         if (!pcViewer.dragging) return;
+
         const dx = e.clientX - pcViewer.lastX;
         const dy = e.clientY - pcViewer.lastY;
+
         pcViewer.lastX = e.clientX;
         pcViewer.lastY = e.clientY;
+
         if (pcViewer.dragButton === 2) {
           const panScale = pcViewer.distance * 0.0016;
           pcViewer.targetX -= dx * panScale;
@@ -965,6 +998,7 @@ INDEX_HTML = r"""
           pcViewer.pitch = Math.max(-1.45, Math.min(1.45, pcViewer.pitch));
         }
       });
+
       canvas.addEventListener("wheel", (e) => {
         e.preventDefault();
         const scale = Math.exp(e.deltaY * 0.001);
@@ -976,14 +1010,19 @@ INDEX_HTML = r"""
 
     function updatePointCloudViewer(payload) {
       if (!payload || !payload.points || !payload.colors || !pcViewer.gl) return;
+
       const gl = pcViewer.gl;
       const points = new Float32Array(payload.points);
       const colors = new Float32Array(payload.colors);
+
       pcViewer.pointCount = Math.floor(points.length / 3);
+
       gl.bindBuffer(gl.ARRAY_BUFFER, pcViewer.posBuffer);
       gl.bufferData(gl.ARRAY_BUFFER, points, gl.DYNAMIC_DRAW);
+
       gl.bindBuffer(gl.ARRAY_BUFFER, pcViewer.colorBuffer);
       gl.bufferData(gl.ARRAY_BUFFER, colors, gl.DYNAMIC_DRAW);
+
       const ph = $("pointcloud-placeholder");
       if (ph) ph.style.display = pcViewer.pointCount > 0 ? "none" : "block";
     }
@@ -991,16 +1030,20 @@ INDEX_HTML = r"""
     function renderPointCloud() {
       const gl = pcViewer.gl;
       const canvas = pcViewer.canvas;
+
       if (!gl || !canvas) {
         requestAnimationFrame(renderPointCloud);
         return;
       }
+
       const w = canvas.clientWidth || 1;
       const h = canvas.clientHeight || 1;
+
       if (canvas.width !== w || canvas.height !== h) {
         canvas.width = w;
         canvas.height = h;
       }
+
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.clearColor(0.008, 0.024, 0.070, 1.0);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -1009,98 +1052,66 @@ INDEX_HTML = r"""
       if (pcViewer.pointCount > 0) {
         const aspect = canvas.width / Math.max(1, canvas.height);
         const proj = mat4Perspective(Math.PI / 4.0, aspect, 0.03, 30.0);
+
         const cp = Math.cos(pcViewer.pitch);
         const sp = Math.sin(pcViewer.pitch);
         const sy = Math.sin(pcViewer.yaw);
         const cy = Math.cos(pcViewer.yaw);
+
         const target = [pcViewer.targetX, pcViewer.targetY, pcViewer.targetZ];
+
         const eye = [
           target[0] + pcViewer.distance * sy * cp,
           target[1] + pcViewer.distance * sp,
           target[2] + pcViewer.distance * cy * cp,
         ];
+
         const view = mat4LookAt(eye, target, [0, 1, 0]);
         const matrix = mat4Multiply(proj, view);
+
         gl.useProgram(pcViewer.program);
+
         const aPos = gl.getAttribLocation(pcViewer.program, "a_position");
         const aColor = gl.getAttribLocation(pcViewer.program, "a_color");
         const uMatrix = gl.getUniformLocation(pcViewer.program, "u_matrix");
+
         gl.uniformMatrix4fv(uMatrix, false, matrix);
+
         gl.bindBuffer(gl.ARRAY_BUFFER, pcViewer.posBuffer);
         gl.enableVertexAttribArray(aPos);
         gl.vertexAttribPointer(aPos, 3, gl.FLOAT, false, 0, 0);
+
         gl.bindBuffer(gl.ARRAY_BUFFER, pcViewer.colorBuffer);
         gl.enableVertexAttribArray(aColor);
         gl.vertexAttribPointer(aColor, 3, gl.FLOAT, false, 0, 0);
+
         gl.drawArrays(gl.POINTS, 0, pcViewer.pointCount);
       }
+
       requestAnimationFrame(renderPointCloud);
     }
 
     function updateDashboard(data) {
+      const ts = data.timestamps || {};
+
       setImg("rgb-img", "rgb-placeholder", data.rgb_image);
       updatePointCloudViewer(data.point_cloud);
       setImg("map-img", "map-placeholder", data.map_image);
+      setImg("left-arm-camera-img", "left-arm-camera-placeholder", data.left_arm_camera_image);
+      setImg("right-arm-camera-img", "right-arm-camera-placeholder", data.right_arm_camera_image);
 
-      $("rgb-ts").textContent = fmtTs(data.timestamps?.rgb, data.counts?.rgb);
-      $("depth-ts").textContent = fmtTs(data.timestamps?.pointcloud, data.counts?.pointcloud);
-      $("map-ts").textContent = fmtTs(data.timestamps?.map, data.counts?.map);
-      $("vlm-ts").textContent = fmtTs(data.timestamps?.vlm || data.timestamps?.stt);
-      $("base-ts").textContent = fmtTs(
-        data.timestamps?.safety || data.timestamps?.person || data.timestamps?.cmd_out || data.timestamps?.base
-      );
-      $("arm-ts").textContent = fmtTs(
-        data.timestamps?.vla || data.timestamps?.vla_left || data.timestamps?.vla_right || data.timestamps?.arm
-      );
-
-      $("stt-text").textContent = safeText(data.stt_text);
-      $("robot-speech").textContent = safeText(data.robot_speech || data.vlm_decision?.robot_speech);
-      $("vlm-status").textContent = safeText(data.inference_status);
+      $("rgb-ts").textContent = fmtTs(ts.rgb, data.counts?.rgb);
+      $("depth-ts").textContent = fmtTs(ts.pointcloud, data.counts?.pointcloud);
+      $("map-ts").textContent = fmtTs(ts.map, data.counts?.map);
+      $("vlm-ts").textContent = fmtTs(ts.vlm || ts.stt);
+      $("leftcam-ts").textContent = fmtTs(ts.left_arm_camera);
+      $("rightcam-ts").textContent = fmtTs(ts.right_arm_camera);
 
       const d = data.vlm_decision || {};
-      const vlmLines = [
-        `need_oxygen_mask: ${safeText(d.need_oxygen_mask, "-")}`,
-        `selected_task: ${safeText(d.selected_task, "-")}`,
-        `adapter_id: ${safeText(d.adapter_id, "-")}`,
-        `confidence: ${safeText(d.confidence, "-")}`,
-        `mock_action: ${safeText(d.mock_action, "-")}`,
-        `latency_sec: ${safeText(d.latency_sec, "-")}`,
-        `camera_age_sec: ${safeText(d.camera_age_sec, "-")}`,
-        `latest_vad: ${safeText(d.latest_vad, "-")}`,
-        `use_vad_gate: ${safeText(d.use_vad_gate, "-")}`,
-        `doa_deg: ${safeText(d.doa_deg, "-")}`,
-        `doa_age_sec: ${safeText(d.doa_age_sec, "-")}`,
-        `live_rgb_topic: ${safeText(d.live_rgb_topic, "-")}`,
-        `live_depth_topic: ${safeText(d.live_depth_topic, "-")}`,
-        `vlm_rgb_snapshot: ${safeText(d.vlm_input_rgb_topic, "-")}`,
-        `vlm_depth_snapshot: ${safeText(d.vlm_input_depth_topic, "-")}`
-      ];
 
-      $("vlm-output").textContent = vlmLines.join("\n");
-      $("vlm-reason").textContent = safeText(d.reason);
-
-      const cmdLines = [
-        "RAW  " + safeText(data.cmd_raw, "-"),
-        "OUT  " + safeText(data.cmd_out, "-"),
-      ];
-      const navLines = [
-        "SCAN " + safeText(data.scan_state, "-"),
-        "ODOM " + safeText(data.odom_state, "-"),
-        "LEGACY " + safeText(data.base_status, "-"),
-      ];
-
-      $("person-follow-state").textContent = safeText(data.person_follow_state);
-      $("safety-guard-state").textContent = safeText(data.safety_guard_state);
-      $("cmd-state").textContent = cmdLines.join("\n");
-      $("nav-state").textContent = navLines.join("\n");
-
-      $("vla-status").textContent = safeText(data.vla_status);
-      $("vla-left-status").textContent = safeText(data.vla_left_status);
-      $("vla-right-status").textContent = safeText(data.vla_right_status);
-      $("arm-status").textContent = [
-        "TASK_REQUEST " + safeText(data.vla_task_request, "-"),
-        "LEGACY " + safeText(data.arm_status, "-"),
-      ].join("\n");
+      $("stt-text").textContent = safeText(data.stt_text || d.stt_text);
+      $("robot-speech").textContent = safeText(data.robot_speech || d.robot_speech);
+      $("executed-model").textContent = safeText(pickExecutedModel(data));
 
       updateMissionAndChips(data);
     }
@@ -1139,7 +1150,6 @@ INDEX_HTML = r"""
     }, 500);
 
     initPointCloudViewer();
-
     connect();
   </script>
 </body>
@@ -1154,6 +1164,8 @@ class SharedState:
             "rgb_image": None,
             "point_cloud": None,
             "map_image": None,
+            "left_arm_camera_image": None,
+            "right_arm_camera_image": None,
             "stt_text": "",
             "vlm_decision": {},
             "robot_speech": "",
@@ -1175,6 +1187,8 @@ class SharedState:
                 "rgb": 0,
                 "pointcloud": 0,
                 "map": 0,
+                "left_arm_camera": 0,
+                "right_arm_camera": 0,
             },
         }
 
@@ -1372,7 +1386,6 @@ def occupancy_grid_to_png_data_url(msg: OccupancyGrid) -> Optional[str]:
         return None
 
 
-
 _POINT_FIELD_DTYPES = {
     1: np.dtype(np.int8),
     2: np.dtype(np.uint8),
@@ -1406,8 +1419,10 @@ def pointcloud2_to_payload(
         base = _POINT_FIELD_DTYPES.get(int(field.datatype))
         if base is None:
             continue
+
         base = base.newbyteorder(endian)
         count = max(1, int(field.count))
+
         names.append(field.name)
         formats.append(base if count == 1 else (base, count))
         offsets.append(int(field.offset))
@@ -1419,44 +1434,89 @@ def pointcloud2_to_payload(
             "offsets": offsets,
             "itemsize": int(msg.point_step),
         })
+
         total_points = int(msg.width) * int(msg.height)
         arr = np.frombuffer(bytes(msg.data), dtype=dtype, count=total_points)
+
         x = np.asarray(arr["x"], dtype=np.float32).reshape(-1)
         y = np.asarray(arr["y"], dtype=np.float32).reshape(-1)
         z = np.asarray(arr["z"], dtype=np.float32).reshape(-1)
+
         valid = np.isfinite(x) & np.isfinite(y) & np.isfinite(z)
         valid &= z > 0.02
+
         if max_range_m > 0:
             valid &= np.sqrt(x * x + y * y + z * z) <= float(max_range_m)
+
         indices = np.flatnonzero(valid)
+
         if indices.size == 0:
-            return {"points": [], "colors": [], "count": 0, "frame_id": msg.header.frame_id, "source_points": total_points}
+            return {
+                "points": [],
+                "colors": [],
+                "count": 0,
+                "frame_id": msg.header.frame_id,
+                "source_points": total_points,
+            }
+
         if indices.size > max_points:
             step = int(math.ceil(indices.size / float(max_points)))
             indices = indices[::step][:max_points]
+
         pts = np.column_stack((x[indices], -y[indices], -z[indices])).astype(np.float32)
+
         colors = None
+
         if "rgb" in arr.dtype.names:
             rgb_raw = np.asarray(arr["rgb"][indices]).reshape(-1)
             if rgb_raw.dtype == np.float32:
                 rgb_uint = rgb_raw.copy().view(np.uint32)
             else:
                 rgb_uint = rgb_raw.astype(np.uint32, copy=False)
-            colors = np.column_stack((((rgb_uint >> 16) & 255), ((rgb_uint >> 8) & 255), (rgb_uint & 255))).astype(np.float32) / 255.0
+
+            colors = np.column_stack((
+                ((rgb_uint >> 16) & 255),
+                ((rgb_uint >> 8) & 255),
+                (rgb_uint & 255),
+            )).astype(np.float32) / 255.0
+
         elif "rgba" in arr.dtype.names:
             rgba_raw = np.asarray(arr["rgba"][indices]).reshape(-1)
             if rgba_raw.dtype == np.float32:
                 rgba_uint = rgba_raw.copy().view(np.uint32)
             else:
                 rgba_uint = rgba_raw.astype(np.uint32, copy=False)
-            colors = np.column_stack((((rgba_uint >> 16) & 255), ((rgba_uint >> 8) & 255), (rgba_uint & 255))).astype(np.float32) / 255.0
+
+            colors = np.column_stack((
+                ((rgba_uint >> 16) & 255),
+                ((rgba_uint >> 8) & 255),
+                (rgba_uint & 255),
+            )).astype(np.float32) / 255.0
+
         elif {"r", "g", "b"}.issubset(arr.dtype.names):
-            colors = np.column_stack((np.asarray(arr["r"][indices]).reshape(-1), np.asarray(arr["g"][indices]).reshape(-1), np.asarray(arr["b"][indices]).reshape(-1))).astype(np.float32) / 255.0
+            colors = np.column_stack((
+                np.asarray(arr["r"][indices]).reshape(-1),
+                np.asarray(arr["g"][indices]).reshape(-1),
+                np.asarray(arr["b"][indices]).reshape(-1),
+            )).astype(np.float32) / 255.0
+
         if colors is None:
             depth = np.clip(z[indices], 0.0, max(0.1, float(max_range_m)))
             norm = depth / max(0.1, float(max_range_m))
-            colors = np.column_stack((0.25 + 0.75 * (1.0 - norm), 0.55 + 0.35 * norm, 1.0 * norm)).astype(np.float32)
-        return {"points": np.round(pts, 4).reshape(-1).tolist(), "colors": np.round(colors, 4).reshape(-1).tolist(), "count": int(pts.shape[0]), "source_points": total_points, "frame_id": msg.header.frame_id}
+            colors = np.column_stack((
+                0.25 + 0.75 * (1.0 - norm),
+                0.55 + 0.35 * norm,
+                1.0 * norm,
+            )).astype(np.float32)
+
+        return {
+            "points": np.round(pts, 4).reshape(-1).tolist(),
+            "colors": np.round(colors, 4).reshape(-1).tolist(),
+            "count": int(pts.shape[0]),
+            "source_points": total_points,
+            "frame_id": msg.header.frame_id,
+        }
+
     except Exception:
         return None
 
@@ -1479,8 +1539,10 @@ def pretty_json_string_or_raw(text: str) -> str:
     parsed = parse_json_string_or_raw(text)
     if not parsed:
         return "대기중"
+
     if set(parsed.keys()) == {"raw"}:
         return str(parsed["raw"])
+
     return json.dumps(parsed, ensure_ascii=False, indent=2)
 
 
@@ -1494,13 +1556,16 @@ def twist_to_text(msg: Twist) -> str:
 def odom_to_text(msg: Odometry) -> str:
     p = msg.pose.pose.position
     q = msg.pose.pose.orientation
+
     yaw = math.atan2(
         2.0 * (q.w * q.z + q.x * q.y),
         1.0 - 2.0 * (q.y * q.y + q.z * q.z),
     )
     yaw_deg = math.degrees(yaw)
+
     v = msg.twist.twist.linear
     w = msg.twist.twist.angular
+
     return (
         f"pos x={p.x:+.3f}, y={p.y:+.3f}, yaw={yaw_deg:+.1f}deg\n"
         f"vel x={v.x:+.3f}, y={v.y:+.3f}, wz={w.z:+.3f}"
@@ -1511,8 +1576,10 @@ def scan_to_text(msg: LaserScan) -> str:
     values = np.asarray(msg.ranges, dtype=np.float32)
     finite = values[np.isfinite(values)]
     valid = finite[(finite > max(0.0, float(msg.range_min))) & (finite < float(msg.range_max))]
+
     if valid.size == 0:
         return "valid_range=0"
+
     return (
         f"min={float(np.min(valid)):.3f}m, mean={float(np.mean(valid)):.3f}m, "
         f"valid={int(valid.size)}/{len(msg.ranges)}"
@@ -1538,9 +1605,9 @@ class ZeriDashboardNode(Node):
         self.create_subscription(String, args.robot_speech_topic, self.robot_speech_callback, text_qos)
         self.create_subscription(String, args.inference_status_topic, self.inference_status_callback, text_qos)
 
+        # UI에서는 더 이상 직접 표시하지 않지만, 실행 모델 추론/상태 판단 보조용으로 유지합니다.
         self.create_subscription(String, args.base_status_topic, self.base_status_callback, text_qos)
         self.create_subscription(String, args.arm_status_topic, self.arm_status_callback, text_qos)
-
         self.create_subscription(String, args.person_state_topic, self.person_state_callback, text_qos)
         self.create_subscription(String, args.safety_state_topic, self.safety_state_callback, text_qos)
         self.create_subscription(Twist, args.cmd_raw_topic, self.cmd_raw_callback, text_qos)
@@ -1553,32 +1620,31 @@ class ZeriDashboardNode(Node):
         self.create_subscription(String, args.vla_right_status_topic, self.vla_right_status_callback, text_qos)
         self.create_subscription(String, args.vla_task_request_topic, self.vla_task_request_callback, text_qos)
 
+        self.create_subscription(Image, args.left_arm_camera_topic, self.left_arm_camera_callback, image_qos)
+        self.create_subscription(Image, args.right_arm_camera_topic, self.right_arm_camera_callback, image_qos)
+
         self.get_logger().info("Ze-Ri Dashboard subscriptions:")
-        self.get_logger().info(f"  RGB:              {args.rgb_topic}")
-        self.get_logger().info(f"  3D PointCloud:    {args.pointcloud_topic}")
-        self.get_logger().info(f"  Map:              {args.map_topic}")
-        self.get_logger().info(f"  STT:              {args.stt_topic}")
-        self.get_logger().info(f"  VLM decision:     {args.vlm_decision_topic}")
-        self.get_logger().info(f"  Robot speech:     {args.robot_speech_topic}")
-        self.get_logger().info(f"  Inference status: {args.inference_status_topic}")
-        self.get_logger().info(f"  Base status:      {args.base_status_topic}")
-        self.get_logger().info(f"  Arm status:       {args.arm_status_topic}")
-        self.get_logger().info(f"  Person state:     {args.person_state_topic}")
-        self.get_logger().info(f"  Safety state:     {args.safety_state_topic}")
-        self.get_logger().info(f"  cmd raw/out:      {args.cmd_raw_topic} -> {args.cmd_out_topic}")
-        self.get_logger().info(f"  Scan/Odom:        {args.scan_topic} / {args.odom_topic}")
-        self.get_logger().info(f"  VLA status:       {args.vla_status_topic}")
-        self.get_logger().info(f"  VLA left/right:   {args.vla_left_status_topic} / {args.vla_right_status_topic}")
-        self.get_logger().info(f"  VLA request:      {args.vla_task_request_topic}")
-        self.get_logger().info(f"  Image QoS:        {args.image_qos}")
+        self.get_logger().info(f"  RGB:                {args.rgb_topic}")
+        self.get_logger().info(f"  3D PointCloud:      {args.pointcloud_topic}")
+        self.get_logger().info(f"  Map:                {args.map_topic}")
+        self.get_logger().info(f"  STT:                {args.stt_topic}")
+        self.get_logger().info(f"  VLM decision:       {args.vlm_decision_topic}")
+        self.get_logger().info(f"  Robot speech:       {args.robot_speech_topic}")
+        self.get_logger().info(f"  Inference status:   {args.inference_status_topic}")
+        self.get_logger().info(f"  VLA status:         {args.vla_status_topic}")
+        self.get_logger().info(f"  VLA left/right:     {args.vla_left_status_topic} / {args.vla_right_status_topic}")
+        self.get_logger().info(f"  VLA request:        {args.vla_task_request_topic}")
+        self.get_logger().info(f"  Left arm camera:    {args.left_arm_camera_topic}")
+        self.get_logger().info(f"  Right arm camera:   {args.right_arm_camera_topic}")
+        self.get_logger().info(f"  Image QoS:          {args.image_qos}")
 
         self.mock_start_time = time.time()
 
         if args.mock_status:
             self.mock_status_timer = self.create_timer(0.5, self.mock_status_callback)
-            self.get_logger().info("  Mock status:      enabled")
+            self.get_logger().info("  Mock status:        enabled")
         else:
-            self.get_logger().info("  Mock status:      disabled")
+            self.get_logger().info("  Mock status:        disabled")
 
     def rgb_callback(self, msg: Image) -> None:
         bgr = image_msg_to_bgr(msg)
@@ -1685,62 +1751,62 @@ class ZeriDashboardNode(Node):
         STATE.update(vla_task_request=pretty_json_string_or_raw(msg.data))
         STATE.update_timestamp("vla")
 
+    def _arm_camera_callback(self, msg: Image, *, side: str) -> None:
+        bgr = image_msg_to_bgr(msg)
+        data_url = encode_image_to_data_url(
+            bgr,
+            ext=".jpg",
+            quality=self.args.jpeg_quality,
+        )
+
+        if not data_url:
+            return
+
+        if side == "left":
+            STATE.update(left_arm_camera_image=data_url)
+            STATE.update_timestamp("left_arm_camera")
+            STATE.increment_count("left_arm_camera")
+        else:
+            STATE.update(right_arm_camera_image=data_url)
+            STATE.update_timestamp("right_arm_camera")
+            STATE.increment_count("right_arm_camera")
+
+    def left_arm_camera_callback(self, msg: Image) -> None:
+        self._arm_camera_callback(msg, side="left")
+
+    def right_arm_camera_callback(self, msg: Image) -> None:
+        self._arm_camera_callback(msg, side="right")
+
     def mock_status_callback(self) -> None:
         t = time.time() - self.mock_start_time
 
-        base_modes = [
-            "IDLE",
-            "VOICE_TRACKING",
-            "APPROACHING_TARGET",
-            "OBSTACLE_GUARD_ACTIVE",
+        model_names = [
+            "idle",
+            "xvla_mask_left_adapter",
+            "xvla_water_right_adapter",
+            "smolvla_handoff_policy",
         ]
-        base_mode = base_modes[int(t // 6.0) % len(base_modes)]
+        model = model_names[int(t // 6.0) % len(model_names)]
 
-        vx = 0.10 + 0.04 * math.sin(t * 0.7)
-        vy = 0.02 * math.sin(t * 0.5)
-        wz = 0.18 * math.sin(t * 0.4)
+        decision = {
+            "stt_text": "숨쉬기가 힘들어",
+            "robot_speech": "산소마스크 전달 작업을 실행합니다.",
+            "selected_task": "oxygen_mask_delivery",
+            "adapter_id": model,
+            "executed_model": model,
+            "confidence": 0.92,
+        }
 
-        left_rpm = 22.0 + 5.0 * math.sin(t * 0.9)
-        rear_rpm = 18.0 + 4.0 * math.sin(t * 0.8)
-        right_rpm = 22.0 + 5.0 * math.sin(t * 1.0 + 0.5)
-
-        base_battery = max(0.0, 96.0 - 0.015 * t)
-
-        base_status = (
-            f"MODE: {base_mode}\n"
-            f"cmd_vel: vx={vx:.2f}, vy={vy:.2f}, wz={wz:.2f}\n"
-            f"rpm: L={left_rpm:.1f}, Rr={rear_rpm:.1f}, R={right_rpm:.1f}\n"
-            f"battery={base_battery:.1f}% | obstacle_guard=ON | source=MOCK"
+        STATE.update(
+            stt_text=decision["stt_text"],
+            robot_speech=decision["robot_speech"],
+            inference_status="MOCK_RUNNING",
+            vlm_decision=decision,
+            vla_status=model,
         )
-
-        arm_states = [
-            "HOME",
-            "READY",
-            "MASK_PICK_PREP",
-            "HOLDING_OXYGEN_MASK",
-        ]
-        arm_state = arm_states[int(t // 7.0) % len(arm_states)]
-
-        shoulder_pan = 5.0 * math.sin(t * 0.4)
-        shoulder_lift = -35.0 + 4.0 * math.sin(t * 0.5)
-        elbow_flex = 42.0 + 6.0 * math.sin(t * 0.6)
-        wrist_flex = 80.0 + 5.0 * math.sin(t * 0.7)
-        wrist_roll = 120.0 + 8.0 * math.sin(t * 0.8)
-        gripper = 35.0 + 15.0 * math.sin(t * 0.9)
-
-        arm_status = (
-            f"STATE: {arm_state}\n"
-            f"policy: idle_lora | SO-101: MOCK\n"
-            f"joints_deg: pan={shoulder_pan:.1f}, lift={shoulder_lift:.1f}, "
-            f"elbow={elbow_flex:.1f}\n"
-            f"wrist_f={wrist_flex:.1f}, wrist_r={wrist_roll:.1f}, "
-            f"gripper={gripper:.1f}%\n"
-            f"source=MOCK"
-        )
-
-        STATE.update(base_status=base_status, arm_status=arm_status)
-        STATE.update_timestamp("base")
-        STATE.update_timestamp("arm")
+        STATE.update_timestamp("stt")
+        STATE.update_timestamp("vlm")
+        STATE.update_timestamp("vla")
 
 
 @app.get("/")
@@ -1786,9 +1852,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--map-qos", choices=["reliable", "best_effort"], default="reliable")
     parser.add_argument("--image-qos-depth", type=int, default=10)
 
-    parser.add_argument("--rgb-topic", default="/camera/camera/color/image_raw")
-    parser.add_argument("--depth-topic", default="/camera/camera/aligned_depth_to_color/image_raw")
-    parser.add_argument("--pointcloud-topic", default="/camera/camera/depth/color/points")
+    parser.add_argument("--rgb-topic", default="/zeri/vlm/input_rgb")
+    parser.add_argument("--depth-topic", default="/zeri/vlm/input_depth")
+    parser.add_argument("--pointcloud-topic", default="/zeri/vlm/pointcloud")
     parser.add_argument("--pointcloud-max-points", type=int, default=30000)
     parser.add_argument("--pointcloud-max-range-m", type=float, default=5.0)
     parser.add_argument("--map-topic", default="/map")
@@ -1798,6 +1864,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--robot-speech-topic", default="/zeri/vlm/robot_speech")
     parser.add_argument("--inference-status-topic", default="/zeri/vlm/inference_status")
 
+    # UI에서는 숨겼지만 기존 실행 커맨드 호환성을 위해 유지합니다.
     parser.add_argument("--base-status-topic", default="/zeri/mobile_base/status")
     parser.add_argument("--arm-status-topic", default="/zeri/arm/status")
 
@@ -1814,10 +1881,25 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vla-task-request-topic", default="/zeri/vla/task_request")
 
     parser.add_argument(
+        "--left-arm-camera-topic",
+        "--left-handoff-image-topic",
+        dest="left_arm_camera_topic",
+        default="/zeri/vla/left/handoff_image",
+        help="Left arm camera image topic.",
+    )
+    parser.add_argument(
+        "--right-arm-camera-topic",
+        "--right-handoff-image-topic",
+        dest="right_arm_camera_topic",
+        default="/zeri/vla/right/handoff_image",
+        help="Right arm camera image topic.",
+    )
+
+    parser.add_argument(
         "--mock-status",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Show temporary mock mobile-base and arm status on dashboard.",
+        help="Show temporary mock STT/TTS/model status on dashboard.",
     )
 
     return parser
@@ -1828,13 +1910,6 @@ def main() -> None:
     args, ros_args = parser.parse_known_args()
 
     rclpy.init(args=ros_args)
-
-    if not hasattr(args, "pointcloud_topic"):
-        args.pointcloud_topic = "/camera/camera/depth/color/points"
-    if not hasattr(args, "pointcloud_max_points"):
-        args.pointcloud_max_points = 30000
-    if not hasattr(args, "pointcloud_max_range_m"):
-        args.pointcloud_max_range_m = 5.0
 
     node = ZeriDashboardNode(args)
 

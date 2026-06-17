@@ -56,21 +56,29 @@ class DisasterBehaviorEngineNode(Node):
         self.declare_parameter("command_topic", "/zeri/behavior/command")
         self.declare_parameter("state_topic", "/zeri/behavior/state")
         self.declare_parameter("vlm_event_topic", "/zeri/behavior/vlm_event")
+        self.declare_parameter("mission_event_topic", "/zeri/mission/event")
         self.declare_parameter("nav_action_name", "/navigate_to_pose")
         self.declare_parameter("target_frame", "map")
         self.declare_parameter("base_frame", "base_link")
-        self.declare_parameter("approach_distance_m", 0.85)
+        self.declare_parameter("approach_distance_m", 0.30)
         self.declare_parameter("goal_z", 0.0)
         self.declare_parameter("auto_approach", False)
         self.declare_parameter("auto_revisit", False)
         self.declare_parameter("min_goal_interval_sec", 3.0)
-        self.declare_parameter("arrival_mode", "test_dwell")
+        self.declare_parameter("person_fresh_timeout_sec", 5.0)
+        self.declare_parameter("arrival_mode", "vlm_wait")
         self.declare_parameter("arrival_dwell_sec", 5.0)
+
+        self.declare_parameter("enable_search", True)
+        self.declare_parameter("search_waypoints", "")
+        self.declare_parameter("search_step_m", 0.5)
+        self.declare_parameter("search_pause_sec", 2.0)
 
         self.marker_topic = str(self.get_parameter("marker_topic").value)
         self.command_topic = str(self.get_parameter("command_topic").value)
         self.state_topic = str(self.get_parameter("state_topic").value)
         self.vlm_event_topic = str(self.get_parameter("vlm_event_topic").value)
+        self.mission_event_topic = str(self.get_parameter("mission_event_topic").value)
         self.nav_action_name = str(self.get_parameter("nav_action_name").value)
         self.target_frame = str(self.get_parameter("target_frame").value)
         self.base_frame = str(self.get_parameter("base_frame").value)
@@ -79,13 +87,40 @@ class DisasterBehaviorEngineNode(Node):
         self.auto_approach = bool(self.get_parameter("auto_approach").value)
         self.auto_revisit = bool(self.get_parameter("auto_revisit").value)
         self.min_goal_interval_sec = float(self.get_parameter("min_goal_interval_sec").value)
+        self.person_fresh_timeout_sec = float(self.get_parameter("person_fresh_timeout_sec").value)
         self.arrival_mode = str(self.get_parameter("arrival_mode").value)
         self.arrival_dwell_sec = float(self.get_parameter("arrival_dwell_sec").value)
+        
+        self.enable_search = bool(self.get_parameter("enable_search").value)
+        self.search_waypoints_str = str(self.get_parameter("search_waypoints").value)
+        self.search_step_m = float(self.get_parameter("search_step_m").value)
+        self.search_pause_sec = float(self.get_parameter("search_pause_sec").value)
+
+        self.search_waypoints = []
+        self.search_waypoints_are_relative = not self.search_waypoints_str.strip()
+        if self.search_waypoints_str.strip():
+            for pt in self.search_waypoints_str.split(";"):
+                if pt.strip():
+                    try:
+                        x_str, y_str = pt.split(",")
+                        self.search_waypoints.append((float(x_str.strip()), float(y_str.strip())))
+                    except ValueError:
+                        pass
+        if not self.search_waypoints:
+            s = self.search_step_m
+            self.search_waypoints = [
+                (s, 0.0), (s, s), (0.0, s), (-s, s),
+                (-s, 0.0), (-s, -s), (0.0, -s), (s, -s)
+            ]
+        self.search_wp_index = 0
+        self.search_origin_xy = None
 
         self.people = {}
         self.visited = set()
         self.active_goal_handle = None
+        self.active_goal_type = None
         self.active_person_id = None
+        self.pending_person_after_cancel = None
         self.handoff_person_id = None
         self.handoff_until = 0.0
         self.last_goal_time = 0.0
@@ -105,6 +140,7 @@ class DisasterBehaviorEngineNode(Node):
         self.create_subscription(String, self.command_topic, self.on_command, 10)
         self.state_pub = self.create_publisher(String, self.state_topic, 10)
         self.vlm_event_pub = self.create_publisher(String, self.vlm_event_topic, 10)
+        self.mission_event_pub = self.create_publisher(String, self.mission_event_topic, 10)
         self.nav_client = ActionClient(self, NavigateToPose, self.nav_action_name)
 
         self.timer = self.create_timer(0.5, self.on_timer)
@@ -113,7 +149,8 @@ class DisasterBehaviorEngineNode(Node):
         self.get_logger().info(
             "disaster behavior engine started: "
             f"markers={self.marker_topic}, command={self.command_topic}, "
-            f"state={self.state_topic}, nav={self.nav_action_name}, "
+            f"state={self.state_topic}, mission_event={self.mission_event_topic}, "
+            f"nav={self.nav_action_name}, "
             f"auto_approach={self.auto_approach}, arrival_mode={self.arrival_mode}"
         )
 
@@ -180,6 +217,11 @@ class DisasterBehaviorEngineNode(Node):
             self.cancel_active_goal()
             return
 
+        if op == "reset_visited":
+            self.visited.clear()
+            self.publish_state("VISITED_RESET", force=True)
+            return
+
         if op in ("resume", "complete_handoff"):
             self.finish_handoff("RESUME")
             return
@@ -188,6 +230,12 @@ class DisasterBehaviorEngineNode(Node):
 
     def on_timer(self):
         if self.active_goal_handle is not None:
+            if self.active_goal_type == "search" and self.auto_approach:
+                target = self.find_nearest_person(include_visited=self.auto_revisit)
+                if target is not None:
+                    self.pending_person_after_cancel = int(target.marker_id)
+                    self.publish_state(f"SEARCH_INTERRUPT person={target.marker_id}", force=True)
+                    self.cancel_active_goal()
             return
 
         if self.handoff_person_id is not None:
@@ -201,19 +249,62 @@ class DisasterBehaviorEngineNode(Node):
                 )
             return
 
+        if self.auto_approach:
+            target = self.find_nearest_person(include_visited=self.auto_revisit)
+            if target is not None:
+                self.send_person_goal(target.marker_id, explicit=False)
+                return
+
+            if time.time() - self.last_goal_time < self.min_goal_interval_sec:
+                return
+
+            if self.enable_search:
+                if time.time() - self.last_goal_time >= self.search_pause_sec:
+                    self.send_search_goal()
+                return
+
         if not self.auto_approach:
             self.publish_state(f"IDLE people={len(self.people)} visited={len(self.visited)}")
             return
 
-        if time.time() - self.last_goal_time < self.min_goal_interval_sec:
+        self.publish_state(f"AUTO_WAIT people={len(self.people)} visited={len(self.visited)}")
+
+    def send_search_goal(self):
+        if not self.search_waypoints:
             return
 
-        target = self.find_nearest_person(include_visited=self.auto_revisit)
-        if target is None:
-            self.publish_state(f"AUTO_WAIT people={len(self.people)} visited={len(self.visited)}")
+        if not self.nav_client.wait_for_server(timeout_sec=2.0):
+            self.publish_state(f"WAIT_NAV action server missing: {self.nav_action_name}", force=True)
             return
 
-        self.send_person_goal(target.marker_id, explicit=False)
+        x, y = self.search_waypoints[self.search_wp_index]
+        if self.search_waypoints_are_relative:
+            if self.search_origin_xy is None:
+                self.search_origin_xy = self.lookup_robot_xy()
+                if self.search_origin_xy is None:
+                    return
+            x += self.search_origin_xy[0]
+            y += self.search_origin_xy[1]
+        
+        pose = PoseStamped()
+        pose.header.frame_id = self.target_frame
+        pose.header.stamp = self.get_clock().now().to_msg()
+        pose.pose.position.x = x
+        pose.pose.position.y = y
+        pose.pose.position.z = self.goal_z
+        pose.pose.orientation.w = 1.0
+        
+        goal = NavigateToPose.Goal()
+        goal.pose = pose
+        goal.behavior_tree = ""
+        
+        self.active_goal_type = "search"
+        self.last_goal_time = time.time()
+        
+        self.publish_state(f"AUTO_SEARCH_GOAL index={self.search_wp_index} goal=({x:.2f},{y:.2f})", force=True)
+        
+        future = self.nav_client.send_goal_async(goal, feedback_callback=self.on_nav_feedback)
+        future.add_done_callback(self.on_goal_response)
 
     def find_nearest_person(self, include_visited: bool):
         robot = self.lookup_robot_xy()
@@ -222,8 +313,11 @@ class DisasterBehaviorEngineNode(Node):
 
         rx, ry = robot
         candidates = []
+        now = time.time()
         for target in self.people.values():
             if not include_visited and target.marker_id in self.visited:
+                continue
+            if now - target.last_seen > self.person_fresh_timeout_sec:
                 continue
             d = math.hypot(target.x - rx, target.y - ry)
             candidates.append((d, target))
@@ -306,6 +400,7 @@ class DisasterBehaviorEngineNode(Node):
         goal.behavior_tree = ""
 
         self.active_person_id = person_id
+        self.active_goal_type = "person"
         self.last_goal_time = time.time()
         mode = "MANUAL" if explicit else "AUTO"
         self.publish_state(
@@ -320,37 +415,64 @@ class DisasterBehaviorEngineNode(Node):
     def on_goal_response(self, future):
         goal_handle = future.result()
         if not goal_handle.accepted:
-            person_id = self.active_person_id
-            self.active_person_id = None
-            self.publish_state(f"NAV_REJECTED person={person_id}", force=True)
+            if self.active_goal_type == "person":
+                person_id = self.active_person_id
+                self.active_person_id = None
+                self.publish_state(f"NAV_REJECTED person={person_id}", force=True)
+            else:
+                self.publish_state(f"SEARCH_REJECTED index={self.search_wp_index}", force=True)
+                self.search_wp_index = (self.search_wp_index + 1) % len(self.search_waypoints)
+            self.active_goal_type = None
             return
 
         self.active_goal_handle = goal_handle
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(self.on_nav_result)
-        self.publish_state(f"NAV_ACCEPTED person={self.active_person_id}", force=True)
+        if self.active_goal_type == "person":
+            self.publish_state(f"NAV_ACCEPTED person={self.active_person_id}", force=True)
+        else:
+            self.publish_state(f"SEARCH_ACCEPTED index={self.search_wp_index}", force=True)
 
     def on_nav_feedback(self, feedback_msg):
         feedback = feedback_msg.feedback
         remaining = float(feedback.distance_remaining)
-        self.publish_state(
-            f"NAV_ACTIVE person={self.active_person_id} remaining={remaining:.2f}"
-        )
+        if self.active_goal_type == "person":
+            self.publish_state(f"NAV_ACTIVE person={self.active_person_id} remaining={remaining:.2f}")
+        else:
+            self.publish_state(f"SEARCH_ACTIVE index={self.search_wp_index} remaining={remaining:.2f}")
 
     def on_nav_result(self, future):
         result = future.result()
-        person_id = self.active_person_id
         status = int(result.status)
+        goal_type = self.active_goal_type
 
         self.active_goal_handle = None
-        self.active_person_id = None
+        self.active_goal_type = None
 
-        if status == GoalStatus.STATUS_SUCCEEDED:
-            self.begin_arrival_handoff(person_id)
-        elif status == GoalStatus.STATUS_CANCELED:
-            self.publish_state(f"CANCELED person={person_id}", force=True)
-        else:
-            self.publish_state(f"FAILED person={person_id} status={status}", force=True)
+        if goal_type == "person":
+            person_id = self.active_person_id
+            self.active_person_id = None
+            if status == GoalStatus.STATUS_SUCCEEDED:
+                self.begin_arrival_handoff(person_id)
+            elif status == GoalStatus.STATUS_CANCELED:
+                self.publish_state(f"CANCELED person={person_id}", force=True)
+            else:
+                self.publish_state(f"FAILED person={person_id} status={status}", force=True)
+        elif goal_type == "search":
+            if status == GoalStatus.STATUS_SUCCEEDED:
+                self.publish_state(f"SEARCH_REACHED index={self.search_wp_index}", force=True)
+                self.search_wp_index = (self.search_wp_index + 1) % len(self.search_waypoints)
+                self.last_goal_time = time.time()
+            elif status == GoalStatus.STATUS_CANCELED:
+                self.publish_state("SEARCH_CANCELED", force=True)
+                pending_person_id = self.pending_person_after_cancel
+                self.pending_person_after_cancel = None
+                if pending_person_id is not None:
+                    self.send_person_goal(int(pending_person_id), explicit=False)
+            else:
+                self.publish_state(f"SEARCH_FAILED index={self.search_wp_index} status={status}", force=True)
+                self.search_wp_index = (self.search_wp_index + 1) % len(self.search_waypoints)
+                self.last_goal_time = time.time()
 
     def begin_arrival_handoff(self, person_id):
         if person_id is None:
@@ -365,12 +487,28 @@ class DisasterBehaviorEngineNode(Node):
             self.handoff_until = 0.0
 
         target = self.people.get(person_id)
+        distance_m = None
+        robot_xy = self.lookup_robot_xy()
+        if target is not None and robot_xy is not None:
+            distance_m = math.hypot(target.x - robot_xy[0], target.y - robot_xy[1])
+
         payload = {
             "event": "arrived_at_person",
             "person_id": person_id,
+            "selected_person_id": f"person_{person_id}",
             "arrival_mode": self.arrival_mode,
             "test_dwell_sec": self.arrival_dwell_sec,
             "target_frame": self.target_frame,
+            "behavior_command_topic": self.command_topic,
+            "source": "disaster_behavior_engine_node",
+            "stamp_sec": time.time(),
+            "target_context": {
+                "distance_m": distance_m,
+                "source": "nav2_behavior_engine",
+                "arrival_reason": "nav2_goal_succeeded",
+                "person_marker_id": person_id,
+                "target_frame": self.target_frame,
+            },
         }
         if target is not None:
             payload.update({
@@ -382,9 +520,10 @@ class DisasterBehaviorEngineNode(Node):
         msg = String()
         msg.data = json.dumps(payload, ensure_ascii=False)
         self.vlm_event_pub.publish(msg)
+        self.mission_event_pub.publish(msg)
 
         self.publish_state(
-            f"ARRIVED person={person_id} -> VLM_EVENT mode={self.arrival_mode}",
+            f"ARRIVED person={person_id} -> VLM_EVENT/MISSION_EVENT mode={self.arrival_mode}",
             force=True,
         )
 
@@ -413,9 +552,14 @@ class DisasterBehaviorEngineNode(Node):
 
         if self.active_goal_handle is None:
             self.publish_state("CANCEL idle", force=True)
+            self.pending_person_after_cancel = None
             return
 
-        self.publish_state(f"CANCELING person={self.active_person_id}", force=True)
+        if self.active_goal_type == "person":
+            self.publish_state(f"CANCELING person={self.active_person_id}", force=True)
+        else:
+            self.publish_state(f"CANCELING search index={self.search_wp_index}", force=True)
+
         future = self.active_goal_handle.cancel_goal_async()
         future.add_done_callback(lambda _: self.publish_state("CANCEL_SENT", force=True))
 

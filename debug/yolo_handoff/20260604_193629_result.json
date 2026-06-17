@@ -1,0 +1,256 @@
+{
+  "timestamp": "20260604_193629",
+  "model": "/home/hansungai/ze-ri/models/hand_yolo.pt",
+  "model_names": {
+    "0": "hand"
+  },
+  "conf": 0.01,
+  "imgsz": 640,
+  "device": "0",
+  "capture": {
+    "source": "camera",
+    "camera": "/dev/cam_left",
+    "width": 640,
+    "height": 480,
+    "encoding": "bgr8"
+  },
+  "num_detections": 13,
+  "detections": [
+    {
+      "index": 0,
+      "class_id": 0,
+      "class_name": "hand",
+      "confidence": 0.7120615839958191,
+      "xyxy": [
+        8.67156982421875,
+        0.0,
+        453.03240966796875,
+        133.29879760742188
+      ],
+      "width": 444,
+      "height": 133,
+      "center_xy": [
+        231.0,
+        66.5
+      ]
+    },
+    {
+      "index": 1,
+      "class_id": 0,
+      "class_name": "hand",
+      "confidence": 0.08961012214422226,
+      "xyxy": [
+        0.0,
+        293.47149658203125,
+        194.02256774902344,
+        479.97015380859375
+      ],
+      "width": 194,
+      "height": 187,
+      "center_xy": [
+        97.0,
+        386.5
+      ]
+    },
+    {
+      "index": 2,
+      "class_id": 0,
+      "class_name": "hand",
+      "confidence": 0.03909836709499359,
+      "xyxy": [
+        574.84130859375,
+        404.3191223144531,
+        640.0,
+        480.0
+      ],
+      "width": 65,
+      "height": 76,
+      "center_xy": [
+        607.5,
+        442.0
+      ]
+    },
+    {
+      "index": 3,
+      "class_id": 0,
+      "class_name": "hand",
+      "confidence": 0.0383099727332592,
+      "xyxy": [
+        582.8682861328125,
+        433.3598327636719,
+        640.0,
+        480.0
+      ],
+      "width": 57,
+      "height": 47,
+      "center_xy": [
+        611.5,
+        456.5
+      ]
+    },
+    {
+      "index": 4,
+      "class_id": 0,
+      "class_name": "hand",
+      "confidence": 0.023074379190802574,
+      "xyxy": [
+        589.0009765625,
+        443.71014404296875,
+        640.0,
+        480.0
+      ],
+      "width": 51,
+      "height": 36,
+      "center_xy": [
+        614.5,
+        462.0
+      ]
+    },
+    {
+      "index": 5,
+      "class_id": 0,
+      "class_name": "hand",
+      "confidence": 0.022267241030931473,
+      "xyxy": [
+        553.6654052734375,
+        390.6141052246094,
+        640.0,
+        480.0
+      ],
+      "width": 86,
+      "height": 89,
+      "center_xy": [
+        597.0,
+        435.5
+      ]
+    },
+    {
+      "index": 6,
+      "class_id": 0,
+      "class_name": "hand",
+      "confidence": 0.01810341514647007,
+      "xyxy": [
+        507.75164794921875,
+        384.8662109375,
+        640.0,
+        479.8675537109375
+      ],
+      "width": 132,
+      "height": 95,
+      "center_xy": [
+        574.0,
+        432.5
+      ]
+    },
+    {
+      "index": 7,
+      "class_id": 0,
+      "class_name": "hand",
+      "confidence": 0.017876703292131424,
+      "xyxy": [
+        547.0775146484375,
+        423.9920654296875,
+        640.0,
+        480.0
+      ],
+      "width": 93,
+      "height": 56,
+      "center_xy": [
+        593.5,
+        452.0
+      ]
+    },
+    {
+      "index": 8,
+      "class_id": 0,
+      "class_name": "hand",
+      "confidence": 0.01696007326245308,
+      "xyxy": [
+        545.202392578125,
+        345.21893310546875,
+        640.0,
+        480.0
+      ],
+      "width": 95,
+      "height": 135,
+      "center_xy": [
+        592.5,
+        412.5
+      ]
+    },
+    {
+      "index": 9,
+      "class_id": 0,
+      "class_name": "hand",
+      "confidence": 0.015478145331144333,
+      "xyxy": [
+        580.3524169921875,
+        347.18505859375,
+        640.0,
+        480.0
+      ],
+      "width": 60,
+      "height": 133,
+      "center_xy": [
+        610.0,
+        413.5
+      ]
+    },
+    {
+      "index": 10,
+      "class_id": 0,
+      "class_name": "hand",
+      "confidence": 0.01475059986114502,
+      "xyxy": [
+        142.55096435546875,
+        344.339599609375,
+        497.9603271484375,
+        479.73272705078125
+      ],
+      "width": 355,
+      "height": 136,
+      "center_xy": [
+        320.5,
+        412.0
+      ]
+    },
+    {
+      "index": 11,
+      "class_id": 0,
+      "class_name": "hand",
+      "confidence": 0.013772702775895596,
+      "xyxy": [
+        0.0,
+        338.5736083984375,
+        523.3114624023438,
+        479.9925537109375
+      ],
+      "width": 523,
+      "height": 141,
+      "center_xy": [
+        261.5,
+        409.5
+      ]
+    },
+    {
+      "index": 12,
+      "class_id": 0,
+      "class_name": "hand",
+      "confidence": 0.012887110933661461,
+      "xyxy": [
+        0.0,
+        293.1280212402344,
+        295.54656982421875,
+        479.9935607910156
+      ],
+      "width": 296,
+      "height": 187,
+      "center_xy": [
+        148.0,
+        386.5
+      ]
+    }
+  ],
+  "raw_image": "/home/hansungai/ze-ri/debug/yolo_handoff/20260604_193629_raw.jpg",
+  "result_image": "/home/hansungai/ze-ri/debug/yolo_handoff/20260604_193629_yolo.jpg"
+}

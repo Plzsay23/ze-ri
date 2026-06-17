@@ -17,8 +17,20 @@ echo "  serial=$SERIAL"
 echo "  rgb_topic=$RGB_TOPIC"
 echo "  depth_topic=$DEPTH_TOPIC"
 
-# 현재 zeri_camera는 ros2 run이 아니라 bin 직접 실행 기준
-exec "$HOME/ze-ri/ros2_ws/install/zeri_camera/bin/realsense_rgbd_node" --ros-args \
+NODE="$HOME/ze-ri/ros2_ws/install/zeri_camera/lib/zeri_camera/realsense_rgbd_node"
+if [ ! -x "$NODE" ]; then
+  NODE="$HOME/ze-ri/ros2_ws/install/zeri_camera/bin/realsense_rgbd_node"
+fi
+
+if [ ! -x "$NODE" ]; then
+  echo "[ERROR] realsense_rgbd_node not found."
+  echo "        checked:"
+  echo "          $HOME/ze-ri/ros2_ws/install/zeri_camera/lib/zeri_camera/realsense_rgbd_node"
+  echo "          $HOME/ze-ri/ros2_ws/install/zeri_camera/bin/realsense_rgbd_node"
+  exit 1
+fi
+
+exec "$NODE" --ros-args \
   -p serial_number:="'$SERIAL'" \
   -p width:=640 \
   -p height:=480 \

@@ -1,0 +1,214 @@
+{
+  "version": 1,
+  "tasks": {
+    "pick_mask": {
+      "source_repo_id": "plzsay/pick_mask",
+      "num_episodes": 30,
+      "tail_frames_per_episode": 10,
+      "state_key": "observation.state",
+      "action_key": "action",
+      "image_key": "observation.images.cam_left",
+      "reference_images": [
+        "config/vla/references/pick_mask/final_ep_0000.png",
+        "config/vla/references/pick_mask/final_ep_0001.png",
+        "config/vla/references/pick_mask/final_ep_0002.png",
+        "config/vla/references/pick_mask/final_ep_0003.png",
+        "config/vla/references/pick_mask/final_ep_0004.png",
+        "config/vla/references/pick_mask/final_ep_0005.png",
+        "config/vla/references/pick_mask/final_ep_0006.png",
+        "config/vla/references/pick_mask/final_ep_0007.png",
+        "config/vla/references/pick_mask/final_ep_0008.png",
+        "config/vla/references/pick_mask/final_ep_0009.png",
+        "config/vla/references/pick_mask/final_ep_0010.png",
+        "config/vla/references/pick_mask/final_ep_0011.png",
+        "config/vla/references/pick_mask/final_ep_0012.png",
+        "config/vla/references/pick_mask/final_ep_0013.png",
+        "config/vla/references/pick_mask/final_ep_0014.png",
+        "config/vla/references/pick_mask/final_ep_0015.png",
+        "config/vla/references/pick_mask/final_ep_0016.png",
+        "config/vla/references/pick_mask/final_ep_0017.png",
+        "config/vla/references/pick_mask/final_ep_0018.png",
+        "config/vla/references/pick_mask/final_ep_0019.png",
+        "config/vla/references/pick_mask/final_ep_0020.png",
+        "config/vla/references/pick_mask/final_ep_0021.png",
+        "config/vla/references/pick_mask/final_ep_0022.png",
+        "config/vla/references/pick_mask/final_ep_0023.png",
+        "config/vla/references/pick_mask/final_ep_0024.png",
+        "config/vla/references/pick_mask/final_ep_0025.png",
+        "config/vla/references/pick_mask/final_ep_0026.png",
+        "config/vla/references/pick_mask/final_ep_0027.png",
+        "config/vla/references/pick_mask/final_ep_0028.png",
+        "config/vla/references/pick_mask/final_ep_0029.png"
+      ],
+      "state_keys": [
+        "shoulder_pan.pos",
+        "shoulder_lift.pos",
+        "elbow_flex.pos",
+        "wrist_flex.pos",
+        "wrist_roll.pos",
+        "gripper.pos"
+      ],
+      "final_state_mean": {
+        "shoulder_pan.pos": -12.202198,
+        "shoulder_lift.pos": 30.141538,
+        "elbow_flex.pos": -69.875458,
+        "wrist_flex.pos": 1.424762,
+        "wrist_roll.pos": -85.842638,
+        "gripper.pos": 8.602674
+      },
+      "final_state_std": {
+        "shoulder_pan.pos": 3.798308,
+        "shoulder_lift.pos": 6.669958,
+        "elbow_flex.pos": 7.822894,
+        "wrist_flex.pos": 9.014224,
+        "wrist_roll.pos": 21.547025,
+        "gripper.pos": 3.514365
+      },
+      "tolerance": {
+        "shoulder_pan.pos": 11.394923,
+        "shoulder_lift.pos": 20.009873,
+        "elbow_flex.pos": 23.468681,
+        "wrist_flex.pos": 27.042671,
+        "wrist_roll.pos": 64.641075,
+        "gripper.pos": 10.543096
+      },
+      "action_keys": [
+        "shoulder_pan.pos",
+        "shoulder_lift.pos",
+        "elbow_flex.pos",
+        "wrist_flex.pos",
+        "wrist_roll.pos",
+        "gripper.pos"
+      ],
+      "final_action_mean": {
+        "shoulder_pan.pos": -12.291282,
+        "shoulder_lift.pos": 28.345788,
+        "elbow_flex.pos": -70.951795,
+        "wrist_flex.pos": 1.599121,
+        "wrist_roll.pos": -86.43282,
+        "gripper.pos": 2.805109
+      },
+      "final_action_std": {
+        "shoulder_pan.pos": 3.64752,
+        "shoulder_lift.pos": 6.516549,
+        "elbow_flex.pos": 7.993363,
+        "wrist_flex.pos": 8.357421,
+        "wrist_roll.pos": 18.41653,
+        "gripper.pos": 0.091483
+      },
+      "action_tolerance": {
+        "shoulder_pan.pos": 10.942561,
+        "shoulder_lift.pos": 19.549647,
+        "elbow_flex.pos": 23.980088,
+        "wrist_flex.pos": 25.072263,
+        "wrist_roll.pos": 55.249589,
+        "gripper.pos": 0.274449
+      }
+    },
+    "pick_wt": {
+      "source_repo_id": "plzsay/pick_wt",
+      "num_episodes": 30,
+      "tail_frames_per_episode": 10,
+      "state_key": "observation.state",
+      "action_key": "action",
+      "image_key": "observation.images.cam_right",
+      "reference_images": [
+        "config/vla/references/pick_wt/final_ep_0000.png",
+        "config/vla/references/pick_wt/final_ep_0001.png",
+        "config/vla/references/pick_wt/final_ep_0002.png",
+        "config/vla/references/pick_wt/final_ep_0003.png",
+        "config/vla/references/pick_wt/final_ep_0004.png",
+        "config/vla/references/pick_wt/final_ep_0005.png",
+        "config/vla/references/pick_wt/final_ep_0006.png",
+        "config/vla/references/pick_wt/final_ep_0007.png",
+        "config/vla/references/pick_wt/final_ep_0008.png",
+        "config/vla/references/pick_wt/final_ep_0009.png",
+        "config/vla/references/pick_wt/final_ep_0010.png",
+        "config/vla/references/pick_wt/final_ep_0011.png",
+        "config/vla/references/pick_wt/final_ep_0012.png",
+        "config/vla/references/pick_wt/final_ep_0013.png",
+        "config/vla/references/pick_wt/final_ep_0014.png",
+        "config/vla/references/pick_wt/final_ep_0015.png",
+        "config/vla/references/pick_wt/final_ep_0016.png",
+        "config/vla/references/pick_wt/final_ep_0017.png",
+        "config/vla/references/pick_wt/final_ep_0018.png",
+        "config/vla/references/pick_wt/final_ep_0019.png",
+        "config/vla/references/pick_wt/final_ep_0020.png",
+        "config/vla/references/pick_wt/final_ep_0021.png",
+        "config/vla/references/pick_wt/final_ep_0022.png",
+        "config/vla/references/pick_wt/final_ep_0023.png",
+        "config/vla/references/pick_wt/final_ep_0024.png",
+        "config/vla/references/pick_wt/final_ep_0025.png",
+        "config/vla/references/pick_wt/final_ep_0026.png",
+        "config/vla/references/pick_wt/final_ep_0027.png",
+        "config/vla/references/pick_wt/final_ep_0028.png",
+        "config/vla/references/pick_wt/final_ep_0029.png"
+      ],
+      "state_keys": [
+        "shoulder_pan.pos",
+        "shoulder_lift.pos",
+        "elbow_flex.pos",
+        "wrist_flex.pos",
+        "wrist_roll.pos",
+        "gripper.pos"
+      ],
+      "final_state_mean": {
+        "shoulder_pan.pos": -8.339048,
+        "shoulder_lift.pos": 23.978022,
+        "elbow_flex.pos": -61.573333,
+        "wrist_flex.pos": 6.552088,
+        "wrist_roll.pos": -88.262857,
+        "gripper.pos": 21.452273
+      },
+      "final_state_std": {
+        "shoulder_pan.pos": 3.216385,
+        "shoulder_lift.pos": 6.541002,
+        "elbow_flex.pos": 6.422228,
+        "wrist_flex.pos": 6.019491,
+        "wrist_roll.pos": 4.117162,
+        "gripper.pos": 0.332859
+      },
+      "tolerance": {
+        "shoulder_pan.pos": 9.649154,
+        "shoulder_lift.pos": 19.623007,
+        "elbow_flex.pos": 19.266685,
+        "wrist_flex.pos": 18.058474,
+        "wrist_roll.pos": 12.351485,
+        "gripper.pos": 0.998577
+      },
+      "action_keys": [
+        "shoulder_pan.pos",
+        "shoulder_lift.pos",
+        "elbow_flex.pos",
+        "wrist_flex.pos",
+        "wrist_roll.pos",
+        "gripper.pos"
+      ],
+      "final_action_mean": {
+        "shoulder_pan.pos": -8.625934,
+        "shoulder_lift.pos": 23.294359,
+        "elbow_flex.pos": -62.528644,
+        "wrist_flex.pos": 6.868278,
+        "wrist_roll.pos": -88.256411,
+        "gripper.pos": 2.799489
+      },
+      "final_action_std": {
+        "shoulder_pan.pos": 3.200981,
+        "shoulder_lift.pos": 6.698624,
+        "elbow_flex.pos": 6.686977,
+        "wrist_flex.pos": 6.015271,
+        "wrist_roll.pos": 4.13323,
+        "gripper.pos": 0.092237
+      },
+      "action_tolerance": {
+        "shoulder_pan.pos": 9.602942,
+        "shoulder_lift.pos": 20.095871,
+        "elbow_flex.pos": 20.060931,
+        "wrist_flex.pos": 18.045813,
+        "wrist_roll.pos": 12.39969,
+        "gripper.pos": 0.276712
+      }
+    }
+  },
+  "generated_at_sec": 1780494341.2612395
+}

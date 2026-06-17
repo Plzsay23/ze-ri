@@ -47,6 +47,9 @@ SUPPORTED_VLA_TASKS = {
     "water_delivery",
     "oxygen_mask_delivery",
     "radio_delivery",
+    "pick_water_act",
+    "water_delivery",
+    "bottle_delivery",
 }
 
 VALID_TASKS = {
@@ -55,6 +58,9 @@ VALID_TASKS = {
     "water_delivery",
     "oxygen_mask_delivery",
     "radio_delivery",
+    "pick_water_act",
+    "water_delivery",
+    "bottle_delivery",
     "call_rescue",
 }
 
@@ -83,12 +89,18 @@ SYSTEM_PROMPT = """
 - VLA handoff 확인 단계에서는 손목 카메라 마지막 프레임을 보고 그리퍼 안의 물체가 사라졌는지 판단한다.
 
 현재 사용 가능한 ACT VLA task는 정확히 세 개다:
+<<<<<<< HEAD
 1. water_delivery
    - 물 전달
 2. oxygen_mask_delivery
+=======
+1. oxygen_mask_delivery
+>>>>>>> 68367dad91c8cf08a61fed0ed3cb9befbc8c8a5d
    - 산소마스크 전달
 3. radio_delivery
    - 무전기 전달
+3. pick_water_act
+   - 물병/물 전달
 
 이 세 task 외에는 VLA를 실행하면 안 된다.
 그 외 상황은 idle, status_check, call_rescue 중 하나로 판단한다.
@@ -99,6 +111,7 @@ SYSTEM_PROMPT = """
   "가스 냄새가 난다", "연기 때문에 숨을 못 쉬겠다" 등은 산소마스크 전달 필요.
 - 장면에 사람이 있고 연기/화재/유독가스 위험이 추정되면 산소마스크 전달 필요.
 - 장면이 애매해도 사용자 텍스트가 호흡 곤란이면 산소마스크 전달 필요.
+- "목마르다", "목이 마르다", "물 줘", "물 주세요", "갈증", "마실 것", "수분", "물병" 등은 pick_water_act를 선택한다.
 - "구조대랑 연락", "무전기", "119 불러", "연락해줘", "도와줘", "통신" 등은 무전기 전달 또는 구조대 통신 필요.
 - 사람이 반응하지 않거나, 처치가 불확실하거나, 직접 처치할 수 없는 상황이면 radio_delivery 또는 call_rescue를 선택한다.
 - 일반 대화, 인사, 위험 없음이면 idle.
@@ -117,8 +130,13 @@ LED command rule:
 출력 JSON schema:
 {
   "hazard_level": "normal|caution|urgent|critical|danger",
+<<<<<<< HEAD
   "scene_status": "normal|respiratory_distress|needs_communication|no_response|fire_nearby|smoke_or_gas|blocked_path|unknown",
   "selected_task": "idle|status_check|water_delivery|oxygen_mask_delivery|radio_delivery|call_rescue",
+=======
+  "scene_status": "normal|respiratory_distress|needs_communication|needs_water|no_response|fire_nearby|smoke_or_gas|blocked_path|unknown",
+  "selected_task": "idle|status_check|oxygen_mask_delivery|radio_delivery|pick_water_act|call_rescue",
+>>>>>>> 68367dad91c8cf08a61fed0ed3cb9befbc8c8a5d
   "nav_intent": "stop|hold_position|rotate_search|approach_person|follow_voice|retreat|go_to_safe_zone",
   "vla_required": true,
   "vla_instruction": "Deliver the oxygen mask to the person.",
@@ -144,6 +162,10 @@ LED command rule:
   - vla_required = true
   - vla_instruction = "Deliver the radio device to the person."
   - led_cmd = 3 또는 5
+- selected_task가 pick_water_act이면:
+  - vla_required = true
+  - vla_instruction = "Deliver the water bottle to the person."
+  - led_cmd = 2 또는 5
 - selected_task가 idle/status_check/call_rescue이면:
   - vla_required = false
 - nav_intent는 고수준 의도만 출력한다. 속도값이나 cmd_vel은 절대 출력하지 않는다.
@@ -158,7 +180,11 @@ USER_PROMPT_TEMPLATE = """
 현재 카메라 장면과 STT 텍스트를 보고 재난 상황을 판단해라.
 
 이번 단계에서는 ACT 기반 VLA task 실행까지 연동한다.
+<<<<<<< HEAD
 단, 실제 실행 가능한 VLA task는 water_delivery, oxygen_mask_delivery, radio_delivery 세 개뿐이다.
+=======
+단, 실제 실행 가능한 VLA task는 oxygen_mask_delivery, radio_delivery, pick_water_act 세 개다.
+>>>>>>> 68367dad91c8cf08a61fed0ed3cb9befbc8c8a5d
 
 STT 텍스트:
 "{stt_text}"
@@ -275,6 +301,7 @@ def infer_task_from_text(raw_text: str) -> Optional[str]:
 
     water_keywords = [
         "목마",
+<<<<<<< HEAD
         "갈증",
         "물 줘",
         "물좀",
@@ -284,6 +311,27 @@ def infer_task_from_text(raw_text: str) -> Optional[str]:
         "water",
         "drink",
         "thirst",
+=======
+        "목이 말",
+        "목 말",
+        "물 줘",
+        "물좀",
+        "물 좀",
+        "물 주세요",
+        "물 필요",
+        "물병",
+        "마실",
+        "마실거",
+        "마실 것",
+        "갈증",
+        "수분",
+        "hydration",
+        "thirst",
+        "thirsty",
+        "water",
+        "bottle",
+        "drink",
+>>>>>>> 68367dad91c8cf08a61fed0ed3cb9befbc8c8a5d
     ]
 
     radio_keywords = [
@@ -305,7 +353,11 @@ def infer_task_from_text(raw_text: str) -> Optional[str]:
         return "oxygen_mask_delivery"
 
     if any(keyword in text for keyword in water_keywords):
+<<<<<<< HEAD
         return "water_delivery"
+=======
+        return "pick_water_act"
+>>>>>>> 68367dad91c8cf08a61fed0ed3cb9befbc8c8a5d
 
     if any(keyword in text for keyword in radio_keywords):
         return "radio_delivery"
@@ -331,6 +383,9 @@ def resolve_led_cmd_from_fields(
 
     if task == "radio_delivery":
         return LED_BLUE
+
+    if task in {"pick_water_act", "water_delivery", "bottle_delivery"}:
+        return LED_GREEN
 
     if hazard in {"critical", "danger"}:
         return LED_RED
@@ -362,6 +417,9 @@ def default_instruction_for_task(selected_task: str) -> str:
 
     if selected_task == "radio_delivery":
         return "Deliver the radio device to the person."
+
+    if selected_task in {"pick_water_act", "water_delivery", "bottle_delivery"}:
+        return "Deliver the water bottle to the person."
 
     return ""
 
@@ -426,6 +484,23 @@ def normalize_decision(
                 raw_text=raw_text,
             )
 
+        if fallback_task == "pick_water_act":
+            return VLMDecision(
+                hazard_level="normal",
+                scene_status="needs_water",
+                selected_task="pick_water_act",
+                nav_intent="hold_position",
+                need_oxygen_mask=False,
+                confidence=0.70,
+                led_cmd=LED_GREEN,
+                reason="VLM JSON parsing failed, but STT text indicates thirst or water request.",
+                robot_speech="목이 마르신 것으로 판단했습니다. 물을 전달하겠습니다.",
+                vla_required=True,
+                vla_instruction=default_instruction_for_task("pick_water_act"),
+                task_duration_sec=default_task_duration_sec,
+                raw_text=raw_text,
+            )
+
         return VLMDecision(
             hazard_level="caution",
             scene_status="unknown",
@@ -468,9 +543,16 @@ def normalize_decision(
         hazard_level = "critical"
         need_oxygen_mask = True
 
+<<<<<<< HEAD
     elif inferred_task == "water_delivery" and selected_task not in SUPPORTED_VLA_TASKS:
         selected_task = "water_delivery"
         scene_status = "needs_water"
+=======
+    elif inferred_task == "pick_water_act" and selected_task not in SUPPORTED_VLA_TASKS:
+        selected_task = "pick_water_act"
+        scene_status = "needs_water"
+        hazard_level = "normal"
+>>>>>>> 68367dad91c8cf08a61fed0ed3cb9befbc8c8a5d
 
     elif inferred_task == "radio_delivery" and selected_task not in SUPPORTED_VLA_TASKS:
         selected_task = "radio_delivery"
@@ -497,12 +579,22 @@ def normalize_decision(
         if hazard_level == "normal":
             hazard_level = "urgent"
 
+    elif selected_task in {"pick_water_act", "water_delivery", "bottle_delivery"}:
+        # Thirst/water request is not a hazard by itself, but it is still a valid VLA delivery task.
+        # Force VLA execution even if the model says the scene is "normal".
+        selected_task = "pick_water_act"
+        vla_required = True
+        if scene_status in {"unknown", "normal"}:
+            scene_status = "needs_water"
+        if hazard_level not in {"normal", "caution", "urgent", "critical", "danger"}:
+            hazard_level = "normal"
+
     else:
         vla_required = False
 
-    parsed_vla_required = parsed.get("vla_required", vla_required)
+    # Delivery tasks must execute even if the VLM mistakenly returns vla_required=false.
     if selected_task in SUPPORTED_VLA_TASKS:
-        vla_required = bool(parsed_vla_required)
+        vla_required = True
     else:
         vla_required = False
 
@@ -535,6 +627,8 @@ def normalize_decision(
             robot_speech = "물 요청으로 판단했습니다. 물 전달을 준비하겠습니다."
         elif selected_task == "radio_delivery":
             robot_speech = "구조대와의 통신이 필요하다고 판단했습니다. 무전기 전달을 준비하겠습니다."
+        elif selected_task in {"pick_water_act", "water_delivery", "bottle_delivery"}:
+            robot_speech = "목이 마르신 것으로 판단했습니다. 물을 전달하겠습니다."
         elif selected_task == "status_check":
             robot_speech = "상황 판단이 불확실합니다. 필요한 도움이 무엇인지 다시 말씀해 주세요."
         elif selected_task == "call_rescue":
@@ -659,10 +753,12 @@ class QwenVLMRunner:
         dtype_name: str,
         max_new_tokens: int,
         default_task_duration_sec: float,
+        image_max_side: int = 448,
     ):
         self.model_id = model_id
         self.max_new_tokens = max_new_tokens
         self.default_task_duration_sec = default_task_duration_sec
+        self.image_max_side = max(0, int(image_max_side))
 
         if dtype_name == "fp16":
             dtype = torch.float16
@@ -677,7 +773,24 @@ class QwenVLMRunner:
 
         self.processor = AutoProcessor.from_pretrained(model_id)
 
+    def resize_for_vlm(self, image: PILImage.Image) -> PILImage.Image:
+        if self.image_max_side <= 0:
+            return image
+
+        width, height = image.size
+        max_side = max(width, height)
+        if max_side <= self.image_max_side:
+            return image
+
+        scale = self.image_max_side / float(max_side)
+        new_size = (
+            max(1, int(round(width * scale))),
+            max(1, int(round(height * scale))),
+        )
+        return image.resize(new_size, PILImage.Resampling.BICUBIC)
+
     def infer(self, image: PILImage.Image, stt_text: str) -> VLMDecision:
+        image = self.resize_for_vlm(image)
         prompt = USER_PROMPT_TEMPLATE.format(stt_text=stt_text)
 
         messages = [
@@ -755,12 +868,17 @@ def _normalize_handoff_result(parsed: Optional[Dict[str, Any]], raw_text: str) -
 
 
 def _qwen_verify_handoff(self: QwenVLMRunner, image: PILImage.Image, *, selected_task: str, arm: str) -> Dict[str, Any]:
+<<<<<<< HEAD
     task_name_map = {
         "water_delivery": "water bottle",
         "oxygen_mask_delivery": "oxygen mask",
         "radio_delivery": "walkie talkie/radio",
     }
     task_name = task_name_map.get(selected_task, "delivered item")
+=======
+    image = self.resize_for_vlm(image)
+    task_name = "oxygen mask" if selected_task == "oxygen_mask_delivery" else "walkie talkie/radio"
+>>>>>>> 68367dad91c8cf08a61fed0ed3cb9befbc8c8a5d
     prompt = f"""
 This is the final wrist-camera frame after a robot VLA handoff motion.
 The robot used its {arm} arm to hand over a {task_name}.
@@ -840,6 +958,16 @@ class ZeriVLMSTTBridgeNode(Node):
         self.declare_parameter("vlm_input_rgb_topic", "/zeri/vlm/input_rgb")
         self.declare_parameter("vlm_input_depth_topic", "/zeri/vlm/input_depth")
         self.declare_parameter("inference_status_topic", "/zeri/vlm/inference_status")
+        self.declare_parameter("mission_event_topic", "/zeri/mission/event")
+        self.declare_parameter("enable_mission_events", True)
+        # Mission arrival should not immediately run VLM.
+        # Default behavior: say a fixed greeting, then wait for the survivor's STT reply.
+        self.declare_parameter("mission_event_mode", "greeting_only")
+        self.declare_parameter("arrival_greeting_text", "괜찮으신가요? 구조대입니다. 필요한 것이 있으면 말씀해 주세요.")
+        self.declare_parameter("arrival_greeting_cooldown_sec", 45.0)
+        self.declare_parameter("arrival_wait_for_stt_sec", 60.0)
+        self.declare_parameter("behavior_command_topic", "/zeri/behavior/command")
+        self.declare_parameter("complete_behavior_on_vla_success", True)
 
         self.declare_parameter("tts_status_topic", "/zeri/tts/status")
         self.declare_parameter("stt_mute_topic", "/zeri/stt/mute")
@@ -863,15 +991,22 @@ class ZeriVLMSTTBridgeNode(Node):
         self.declare_parameter("arm_home_request_topic", "/zeri/arm/home_request")
         self.declare_parameter("handoff_verify_timeout_sec", 10.0)
         self.declare_parameter("home_return_timeout_sec", 5.0)
+        self.declare_parameter("post_handoff_speech_enabled", True)
+        self.declare_parameter("post_handoff_speech_mode", "override")
+        self.declare_parameter("post_handoff_wait_for_stt_sec", 60.0)
+        # Publish a deterministic follow-up TTS as soon as the VLA reaches the handoff phase.
+        # This avoids a silent gap when visual handoff verification is slow, unclear, or skipped.
+        self.declare_parameter("post_handoff_speech_on_handoff_pose", True)
 
         self.declare_parameter("vad_topic", "/zeri/audio/vad")
         self.declare_parameter("doa_topic", "/zeri/audio/doa_deg")
         self.declare_parameter("use_vad_gate", False)
         self.declare_parameter("vad_hold_sec", 1.2)
 
-        self.declare_parameter("model_id", "Qwen/Qwen3-VL-8B-Instruct")
+        self.declare_parameter("model_id", "Qwen/Qwen3-VL-4B-Instruct")
         self.declare_parameter("dtype", "bf16")
-        self.declare_parameter("max_new_tokens", 192)
+        self.declare_parameter("max_new_tokens", 96)
+        self.declare_parameter("vlm_image_max_side", 448)
         self.declare_parameter("confidence_threshold", 0.50)
         self.declare_parameter("queue_size", 4)
 
@@ -894,6 +1029,24 @@ class ZeriVLMSTTBridgeNode(Node):
         self.vlm_input_rgb_topic = str(self.get_parameter("vlm_input_rgb_topic").value)
         self.vlm_input_depth_topic = str(self.get_parameter("vlm_input_depth_topic").value)
         self.inference_status_topic = str(self.get_parameter("inference_status_topic").value)
+        self.mission_event_topic = str(self.get_parameter("mission_event_topic").value)
+        self.enable_mission_events = bool(self.get_parameter("enable_mission_events").value)
+        self.mission_event_mode = str(self.get_parameter("mission_event_mode").value).strip().lower()
+        if self.mission_event_mode not in {"greeting_only", "vlm"}:
+            self.mission_event_mode = "greeting_only"
+        self.arrival_greeting_text = str(self.get_parameter("arrival_greeting_text").value).strip()
+        if not self.arrival_greeting_text:
+            self.arrival_greeting_text = "괜찮으신가요? 구조대입니다. 필요한 것이 있으면 말씀해 주세요."
+        self.arrival_greeting_cooldown_sec = float(
+            self.get_parameter("arrival_greeting_cooldown_sec").value
+        )
+        self.arrival_wait_for_stt_sec = float(
+            self.get_parameter("arrival_wait_for_stt_sec").value
+        )
+        self.behavior_command_topic = str(self.get_parameter("behavior_command_topic").value)
+        self.complete_behavior_on_vla_success = bool(
+            self.get_parameter("complete_behavior_on_vla_success").value
+        )
 
         self.tts_status_topic = str(self.get_parameter("tts_status_topic").value)
         self.stt_mute_topic = str(self.get_parameter("stt_mute_topic").value)
@@ -942,6 +1095,20 @@ class ZeriVLMSTTBridgeNode(Node):
         self.arm_home_request_topic = str(self.get_parameter("arm_home_request_topic").value)
         self.handoff_verify_timeout_sec = float(self.get_parameter("handoff_verify_timeout_sec").value)
         self.home_return_timeout_sec = float(self.get_parameter("home_return_timeout_sec").value)
+        self.post_handoff_speech_enabled = bool(
+            self.get_parameter("post_handoff_speech_enabled").value
+        )
+        self.post_handoff_speech_mode = str(
+            self.get_parameter("post_handoff_speech_mode").value
+        ).strip().lower()
+        if self.post_handoff_speech_mode not in {"override", "fallback"}:
+            self.post_handoff_speech_mode = "override"
+        self.post_handoff_wait_for_stt_sec = float(
+            self.get_parameter("post_handoff_wait_for_stt_sec").value
+        )
+        self.post_handoff_speech_on_handoff_pose = bool(
+            self.get_parameter("post_handoff_speech_on_handoff_pose").value
+        )
 
         self.vad_topic = str(self.get_parameter("vad_topic").value)
         self.doa_topic = str(self.get_parameter("doa_topic").value)
@@ -951,6 +1118,7 @@ class ZeriVLMSTTBridgeNode(Node):
         model_id = str(self.get_parameter("model_id").value)
         dtype = str(self.get_parameter("dtype").value)
         max_new_tokens = int(self.get_parameter("max_new_tokens").value)
+        vlm_image_max_side = int(self.get_parameter("vlm_image_max_side").value)
         queue_size = int(self.get_parameter("queue_size").value)
         self.confidence_threshold = float(
             self.get_parameter("confidence_threshold").value
@@ -1013,6 +1181,12 @@ class ZeriVLMSTTBridgeNode(Node):
         self.waiting_for_home_return = False
         self.active_vla_arm: Optional[str] = None
         self.active_vla_selected_task: Optional[str] = None
+        self.active_mission_person_id: Optional[str] = None
+        self.active_mission_event: Optional[Dict[str, Any]] = None
+        self.last_arrival_greeting_time = 0.0
+        self.hri_waiting_for_stt_until = 0.0
+        self.post_handoff_speech_published_key = ""
+        self.post_handoff_speech_last_time = 0.0
 
         self.latest_vad = False
         self.latest_vad_time = 0.0
@@ -1056,6 +1230,16 @@ class ZeriVLMSTTBridgeNode(Node):
             self.stt_callback,
             reliable_qos,
         )
+
+        if self.enable_mission_events:
+            self.mission_event_sub = self.create_subscription(
+                String,
+                self.mission_event_topic,
+                self.mission_event_callback,
+                reliable_qos,
+            )
+        else:
+            self.mission_event_sub = None
 
         self.tts_status_sub = self.create_subscription(
             String,
@@ -1144,6 +1328,11 @@ class ZeriVLMSTTBridgeNode(Node):
             self.stt_mute_topic,
             reliable_qos,
         )
+        self.behavior_command_publisher = self.create_publisher(
+            String,
+            self.behavior_command_topic,
+            reliable_qos,
+        )
         self.arm_home_request_publisher = self.create_publisher(
             Bool,
             self.arm_home_request_topic,
@@ -1159,6 +1348,7 @@ class ZeriVLMSTTBridgeNode(Node):
         self.get_logger().info(f"  RGB input:         {self.rgb_topic}")
         self.get_logger().info(f"  Depth input:       {self.depth_topic}")
         self.get_logger().info(f"  STT input:         {self.stt_topic}")
+        self.get_logger().info(f"  Mission event:     {self.mission_event_topic}")
         self.get_logger().info(f"  TTS status:        {self.tts_status_topic}")
         self.get_logger().info(f"  VLA status:        {self.vla_status_topic}")
         self.get_logger().info(f"  Left wrist snap:   {self.left_wrist_snapshot_topic}")
@@ -1176,6 +1366,7 @@ class ZeriVLMSTTBridgeNode(Node):
         self.get_logger().info(f"  VLM status:        {self.inference_status_topic}")
         self.get_logger().info(f"  STT mute:          {self.stt_mute_topic}")
         self.get_logger().info(f"  Arm home request:  {self.arm_home_request_topic}")
+        self.get_logger().info(f"  Behavior command:  {self.behavior_command_topic}")
 
         self.get_logger().info("Runtime settings:")
         self.get_logger().info(f"  enable_vla: {self.enable_vla}")
@@ -1189,13 +1380,26 @@ class ZeriVLMSTTBridgeNode(Node):
             f"  wake_listen_window_sec: {self.wake_listen_window_sec}"
         )
         self.get_logger().info(f"  use_vad_gate: {self.use_vad_gate}")
+        self.get_logger().info(f"  enable_mission_events: {self.enable_mission_events}")
+        self.get_logger().info(f"  mission_event_mode: {self.mission_event_mode}")
+        self.get_logger().info(f"  arrival_greeting_text: {self.arrival_greeting_text}")
+        self.get_logger().info(
+            f"  complete_behavior_on_vla_success: {self.complete_behavior_on_vla_success}"
+        )
         self.get_logger().info(f"  vad_hold_sec: {self.vad_hold_sec}")
         self.get_logger().info(
             f"  stt_block_after_tts_sec: {self.stt_block_after_tts_sec}"
         )
         self.get_logger().info(f"  tts_max_wait_sec: {self.tts_max_wait_sec}")
         self.get_logger().info(f"  handoff_verify_timeout_sec: {self.handoff_verify_timeout_sec}")
+        self.get_logger().info(f"  post_handoff_speech_enabled: {self.post_handoff_speech_enabled}")
+        self.get_logger().info(f"  post_handoff_speech_mode: {self.post_handoff_speech_mode}")
+        self.get_logger().info(f"  post_handoff_wait_for_stt_sec: {self.post_handoff_wait_for_stt_sec}")
+        self.get_logger().info(f"  post_handoff_speech_on_handoff_pose: {self.post_handoff_speech_on_handoff_pose}")
         self.get_logger().info(f"  home_return_timeout_sec: {self.home_return_timeout_sec}")
+        self.get_logger().info(f"  model_id: {model_id}")
+        self.get_logger().info(f"  max_new_tokens: {max_new_tokens}")
+        self.get_logger().info(f"  vlm_image_max_side: {vlm_image_max_side}")
 
         self.publish_stt_mute(False)
 
@@ -1208,6 +1412,7 @@ class ZeriVLMSTTBridgeNode(Node):
             dtype_name=dtype,
             max_new_tokens=max_new_tokens,
             default_task_duration_sec=self.vla_default_task_duration_sec,
+            image_max_side=vlm_image_max_side,
         )
 
         self.worker = threading.Thread(
@@ -1237,6 +1442,129 @@ class ZeriVLMSTTBridgeNode(Node):
         msg.data = status
         self.inference_status_publisher.publish(msg)
         self.get_logger().info(f"[VLM STATUS] {status}")
+
+    def default_post_handoff_speech(self, selected_task: str) -> str:
+        task = str(selected_task or "").strip().lower()
+
+        if task in {"oxygen_mask_delivery", "mask_delivery", "pick_mask_act"}:
+            return "산소마스크입니다. 착용해 주세요. 더 필요한 건 없으신가요? 불편하신 데는 없으신가요? 말씀해 주세요."
+
+        if task in {"pick_water_act", "water_delivery", "bottle_delivery", "pick_bottle_act"}:
+            return "물입니다. 천천히 드세요. 더 필요한 건 없으신가요? 불편하신 데는 없으신가요? 말씀해 주세요."
+
+        if task in {"radio_delivery", "wt_delivery", "pick_wt_act"}:
+            return "무전기입니다. 구조대와 통화하실 수 있습니다. 더 필요한 건 없으신가요? 불편하신 데는 없으신가요? 말씀해 주세요."
+
+        return "전달했습니다. 더 필요한 건 없으신가요? 불편하신 데는 없으신가요? 말씀해 주세요."
+
+    def resolve_post_handoff_speech(self, selected_task: str, model_speech: Any, handoff_status: str) -> str:
+        speech = str(model_speech or "").strip()
+
+        if not self.post_handoff_speech_enabled:
+            return speech
+
+        if str(handoff_status or "").strip().lower() != "received":
+            return speech
+
+        if self.post_handoff_speech_mode == "fallback" and speech:
+            return speech
+
+        return self.default_post_handoff_speech(selected_task)
+
+    def _post_handoff_key(self, task_id: str = "", selected_task: str = "") -> str:
+        task_id = str(task_id or "").strip()
+        selected_task = str(selected_task or "").strip()
+        if task_id:
+            return task_id
+        with self.pipeline_lock:
+            active_task_id = str(self.active_vla_task_id or "").strip()
+            active_person_id = str(self.active_mission_person_id or "").strip()
+        if active_task_id:
+            return active_task_id
+        return f"{active_person_id}:{selected_task}"
+
+    def publish_post_handoff_speech_once(
+        self,
+        *,
+        selected_task: str,
+        task_id: str = "",
+        model_speech: Any = "",
+        handoff_status: str = "received",
+        reason: str = "post_handoff",
+        force_default: bool = True,
+    ) -> bool:
+        """Publish the human follow-up TTS once per VLA task.
+
+        The previous path only spoke after visual handoff verification returned
+        handoff_status=received. In practice that can be too brittle: the wrist
+        snapshot may be missing, the verifier may return unknown, or the VLA
+        status may already move to home return. This method makes the HRI
+        follow-up deterministic.
+        """
+        if not self.post_handoff_speech_enabled:
+            return False
+
+        selected_task = str(selected_task or "").strip()
+        key = self._post_handoff_key(task_id=task_id, selected_task=selected_task)
+        if not key:
+            key = f"unknown:{int(time.time())}"
+
+        now = time.time()
+        with self.pipeline_lock:
+            if self.post_handoff_speech_published_key == key:
+                self.publish_inference_status(f"post_handoff_speech_already_published: {reason}")
+                return False
+            # Safety guard for status streams that do not provide a stable task_id.
+            if (
+                not task_id
+                and self.post_handoff_speech_last_time > 0.0
+                and now - self.post_handoff_speech_last_time < 8.0
+            ):
+                self.publish_inference_status(f"post_handoff_speech_recently_published: {reason}")
+                return False
+            self.post_handoff_speech_published_key = key
+            self.post_handoff_speech_last_time = now
+
+        if force_default:
+            speech = self.default_post_handoff_speech(selected_task)
+        else:
+            speech = self.resolve_post_handoff_speech(
+                selected_task=selected_task,
+                model_speech=model_speech,
+                handoff_status=handoff_status,
+            )
+            if not speech:
+                speech = self.default_post_handoff_speech(selected_task)
+
+        speech = str(speech or "").strip()
+        if not speech:
+            return False
+
+        self.mark_waiting_for_tts()
+        speech_msg = String()
+        speech_msg.data = speech
+        self.robot_speech_publisher.publish(speech_msg)
+        self.publish_inference_status(f"post_handoff_speech_published: {reason}")
+        self.mark_hri_waiting_for_stt(
+            "post_handoff_speech",
+            self.post_handoff_wait_for_stt_sec,
+        )
+        self.get_logger().info(f"[POST HANDOFF SPEECH] {speech}")
+        return True
+
+    def mark_hri_waiting_for_stt(self, reason: str, wait_sec: Optional[float] = None) -> None:
+        now = time.time()
+        if wait_sec is None:
+            wait_sec = self.arrival_wait_for_stt_sec
+
+        with self.pipeline_lock:
+            self.hri_waiting_for_stt_until = now + max(0.0, float(wait_sec))
+            # Reuse this timestamp so repeated arrived_at_person events do not
+            # immediately re-trigger the first-contact greeting while the robot
+            # is waiting for the survivor's next STT reply.
+            self.last_arrival_greeting_time = now
+
+        self.publish_inference_status(f"hri_waiting_for_stt_after_{reason}")
 
     def publish_stt_mute(self, muted: bool) -> None:
         with self.pipeline_lock:
@@ -1323,8 +1651,14 @@ class ZeriVLMSTTBridgeNode(Node):
 
     def finish_vla_and_maybe_release(self, reason: str, success: bool) -> None:
         should_release = False
+        should_complete_behavior = False
 
         with self.pipeline_lock:
+            should_complete_behavior = (
+                success
+                and self.complete_behavior_on_vla_success
+                and self.active_mission_person_id is not None
+            )
             self.waiting_for_vla = False
             self.vla_active = False
             self.vla_deadline = 0.0
@@ -1332,6 +1666,9 @@ class ZeriVLMSTTBridgeNode(Node):
             self.waiting_for_home_return = False
             self.active_vla_arm = None
             self.active_vla_selected_task = None
+            if should_complete_behavior:
+                self.active_mission_person_id = None
+                self.active_mission_event = None
 
             if not self.waiting_for_tts and not self.tts_active:
                 should_release = True
@@ -1345,6 +1682,9 @@ class ZeriVLMSTTBridgeNode(Node):
             self.release_pipeline_block(reason)
         else:
             self.publish_inference_status(f"vla_done_waiting_for_tts: {reason}")
+
+        if should_complete_behavior:
+            self.publish_behavior_command("complete_handoff")
 
     def is_stt_input_blocked(self) -> bool:
         now = time.time()
@@ -1483,6 +1823,164 @@ class ZeriVLMSTTBridgeNode(Node):
         self.publish_inference_status("arm_home_request_published_waiting_for_home")
         self.get_logger().info(f"[ARM HOME REQUEST] true -> {self.arm_home_request_topic}")
 
+    def publish_behavior_command(self, command: str) -> None:
+        msg = String()
+        msg.data = command
+        self.behavior_command_publisher.publish(msg)
+        self.get_logger().info(f"[BEHAVIOR COMMAND] {command} -> {self.behavior_command_topic}")
+
+    def enqueue_vlm_text(self, text: str, reason: str) -> bool:
+        text = self.normalize_stt_text(text)
+        if not text:
+            return False
+
+        if self.is_stt_input_blocked():
+            self.get_logger().info(f"Ignored VLM trigger while pipeline busy: {reason}")
+            self.publish_inference_status(f"ignored_trigger_pipeline_busy: {reason}")
+            return False
+
+        self.last_inference_request_time = time.time()
+        self.begin_pipeline_block(reason)
+        self.publish_inference_status(f"accepted_vlm_trigger: {reason}")
+
+        try:
+            self.text_queue.put_nowait(text)
+            return True
+        except queue.Full:
+            try:
+                dropped = self.text_queue.get_nowait()
+                self.get_logger().warn(f"Dropped old VLM text due to full queue: {dropped}")
+            except queue.Empty:
+                pass
+
+            try:
+                self.text_queue.put_nowait(text)
+                return True
+            except queue.Full:
+                self.get_logger().error("Failed to enqueue VLM trigger text.")
+                self.publish_inference_status("mission_event_queue_full_error")
+                self.publish_led(self.led_on_error)
+                self.release_pipeline_block("mission_event_queue_full_error")
+                return False
+
+    def publish_arrival_greeting(self, person_id: str, data: Dict[str, Any]) -> None:
+        """Say a fixed first-contact HRI greeting without running VLM inference.
+
+        The robot should stop at the person, speak once, and then wait for the user's STT reply.
+        The next STT message will be handled by stt_callback(), which runs the VLM normally.
+        """
+        now = time.time()
+
+        with self.pipeline_lock:
+            self.active_mission_person_id = person_id
+            self.active_mission_event = data
+            self.last_arrival_greeting_time = now
+            self.hri_waiting_for_stt_until = now + max(0.0, self.arrival_wait_for_stt_sec)
+
+            # Do not set pipeline_busy here. We only block while TTS is speaking,
+            # then return to STT listening state.
+            self.waiting_for_vla = False
+            self.vla_active = False
+            self.vla_deadline = 0.0
+            self.active_vla_task_id = None
+            self.waiting_for_home_return = False
+
+        speech = self.arrival_greeting_text
+
+        # Mute STT while the robot itself is speaking, but do not keep STT blocked after TTS is done.
+        self.publish_stt_mute(True)
+        self.mark_waiting_for_tts()
+
+        speech_msg = String()
+        speech_msg.data = speech
+        self.robot_speech_publisher.publish(speech_msg)
+
+        decision_payload = {
+            "event": "arrival_greeting",
+            "selected_person_id": person_id,
+            "selected_task": "status_check",
+            "vla_required": False,
+            "robot_speech": speech,
+            "reason": "arrived_at_person received; fixed greeting published; waiting for STT reply",
+            "source": "zeri_vlm_stt_bridge_node",
+            "mission_event_mode": self.mission_event_mode,
+            "stamp_sec": now,
+        }
+        decision_msg = String()
+        decision_msg.data = json.dumps(decision_payload, ensure_ascii=False)
+        self.decision_publisher.publish(decision_msg)
+
+        self.publish_led(LED_WHITE)
+        self.publish_inference_status("hri_waiting_for_stt_after_arrival_greeting")
+        self.get_logger().info(f"[MISSION EVENT RX] arrival greeting only: {json.dumps(data, ensure_ascii=False)}")
+
+    def mission_event_callback(self, msg: String) -> None:
+        try:
+            data = json.loads(msg.data)
+        except json.JSONDecodeError:
+            self.get_logger().warn(f"Invalid mission event JSON: {msg.data}")
+            return
+
+        event = str(data.get("event") or "").strip()
+        if event != "arrived_at_person":
+            return
+
+        person_id = str(
+            data.get("selected_person_id")
+            or data.get("person_id")
+            or "person"
+        ).strip()
+        target_context = data.get("target_context")
+        if not isinstance(target_context, dict):
+            target_context = {}
+
+        distance = target_context.get("distance_m")
+        distance_text = ""
+        try:
+            if distance is not None:
+                distance_text = f" 현재 사람과의 추정 거리는 {float(distance):.2f}미터다."
+        except (TypeError, ValueError):
+            distance_text = ""
+
+        now = time.time()
+
+        # If the robot already greeted and is waiting for the survivor's STT reply,
+        # repeated arrival events must not re-trigger speech or VLM.
+        with self.pipeline_lock:
+            already_waiting_for_stt = now < self.hri_waiting_for_stt_until
+            since_last_greeting = now - self.last_arrival_greeting_time
+
+        if already_waiting_for_stt:
+            self.publish_inference_status("ignored_arrival_event_waiting_for_stt")
+            return
+
+        if (
+            self.arrival_greeting_cooldown_sec > 0
+            and self.last_arrival_greeting_time > 0.0
+            and since_last_greeting < self.arrival_greeting_cooldown_sec
+        ):
+            self.publish_inference_status("ignored_arrival_event_greeting_cooldown")
+            return
+
+        if self.mission_event_mode == "greeting_only":
+            self.publish_arrival_greeting(person_id, data)
+            return
+
+        # Legacy behavior: arrival event runs VLM immediately.
+        with self.pipeline_lock:
+            self.active_mission_person_id = person_id
+            self.active_mission_event = data
+
+        prompt = (
+            "자율주행으로 구조 대상 사람 앞에 도착했다. "
+            f"대상 ID는 {person_id}이다.{distance_text} "
+            "카메라 장면을 보고 먼저 사람에게 상태를 확인하는 짧은 말을 하라. "
+            "호흡 곤란, 통신 필요, 의식 저하가 의심되면 필요한 VLA 물품 전달 task를 선택하라."
+        )
+
+        if self.enqueue_vlm_text(prompt, "mission_event_arrived_at_person"):
+            self.get_logger().info(f"[MISSION EVENT RX] arrived_at_person: {msg.data}")
+
     def run_handoff_verification(self, data: Dict[str, Any]) -> None:
         arm = str(data.get("arm") or self.active_vla_arm or "").strip().lower()
         selected_task = str(data.get("selected_task") or self.active_vla_selected_task or "").strip()
@@ -1528,19 +2026,29 @@ class ZeriVLMSTTBridgeNode(Node):
             "source": "zeri_vlm_stt_bridge_node",
             "stamp_sec": time.time(),
         }
+        status = str(result.get("handoff_status") or "unknown").strip().lower()
+        speech = self.resolve_post_handoff_speech(
+            selected_task=selected_task,
+            model_speech=result.get("robot_speech"),
+            handoff_status=status,
+        )
+        result_payload["robot_speech"] = speech
+
         msg = String()
         msg.data = json.dumps(result_payload, ensure_ascii=False)
         self.decision_publisher.publish(msg)
         self.get_logger().info(f"[HANDOFF VERIFY] {msg.data}")
 
-        speech = str(result.get("robot_speech") or "").strip()
         if speech:
-            self.mark_waiting_for_tts()
-            speech_msg = String()
-            speech_msg.data = speech
-            self.robot_speech_publisher.publish(speech_msg)
+            self.publish_post_handoff_speech_once(
+                selected_task=selected_task,
+                task_id=str(data.get("task_id") or data.get("request_id") or ""),
+                model_speech=speech,
+                handoff_status=status,
+                reason="handoff_verify_received",
+                force_default=False,
+            )
 
-        status = str(result.get("handoff_status") or "unknown")
         if status == "received" and bool(result.get("arm_home_required", True)):
             self.publish_led(self.led_on_vla_success)
             self.publish_arm_home_request()
@@ -1570,7 +2078,31 @@ class ZeriVLMSTTBridgeNode(Node):
             active_task_id = self.active_vla_task_id
 
         if not active_task_id:
-            if status not in {"idle"}:
+            # If the VLA task was started outside this bridge or the task id was cleared
+            # too early, still allow a final handoff/HRI speech instead of staying silent.
+            if status in {
+                "handoff_pose_reached",
+                "awaiting_handoff_verify",
+                "home_return_started",
+                "home_requested",
+                "release_requested",
+                "release_and_home_requested",
+                "released",
+                "object_released",
+                "home_return_finished",
+                "succeeded",
+                "handoff_completed",
+            }:
+                self.get_logger().info(
+                    f"Handling VLA handoff status even without active task id: {msg.data}"
+                )
+                self.publish_post_handoff_speech_once(
+                    selected_task=selected_task,
+                    task_id=task_id,
+                    reason=f"no_active_task_{status}",
+                    force_default=True,
+                )
+            elif status not in {"idle"}:
                 self.get_logger().info(
                     f"Ignored VLA status because no active VLA task: {msg.data}"
                 )
@@ -1607,19 +2139,40 @@ class ZeriVLMSTTBridgeNode(Node):
                 self.vla_deadline = time.time() + self.handoff_verify_timeout_sec
 
             self.publish_inference_status("vla_handoff_pose_reached_start_verify")
+
+            if self.post_handoff_speech_on_handoff_pose:
+                self.publish_post_handoff_speech_once(
+                    selected_task=selected_task or self.active_vla_selected_task or "",
+                    task_id=task_id,
+                    reason=status,
+                    force_default=True,
+                )
+
             self.run_handoff_verification(data)
             return
 
-        if status in {"home_return_started", "home_requested"}:
+        if status in {"home_return_started", "home_requested", "release_requested", "release_and_home_requested", "released", "object_released"}:
             with self.pipeline_lock:
                 self.waiting_for_vla = True
                 self.vla_active = True
                 self.waiting_for_home_return = True
                 self.vla_deadline = time.time() + self.home_return_timeout_sec
+            self.publish_post_handoff_speech_once(
+                selected_task=selected_task or self.active_vla_selected_task or "",
+                task_id=task_id,
+                reason=status,
+                force_default=True,
+            )
             self.publish_inference_status(f"vla_{status}")
             return
 
-        if status in {"home_return_finished", "succeeded"}:
+        if status in {"home_return_finished", "succeeded", "handoff_completed"}:
+            self.publish_post_handoff_speech_once(
+                selected_task=selected_task or self.active_vla_selected_task or "",
+                task_id=task_id,
+                reason=status,
+                force_default=True,
+            )
             self.publish_inference_status("vla_home_return_finished_returning_to_listen")
             self.finish_vla_and_maybe_release("vla_home_return_finished", success=True)
             return
@@ -1797,6 +2350,8 @@ class ZeriVLMSTTBridgeNode(Node):
         self.get_logger().info(
             f"Accepted STT text for VLM: raw='{raw_stt_text}', command='{accepted_text}'"
         )
+        with self.pipeline_lock:
+            self.hri_waiting_for_stt_until = 0.0
         self.publish_inference_status("accepted_stt_text")
 
         try:
@@ -1863,6 +2418,8 @@ class ZeriVLMSTTBridgeNode(Node):
             self.vla_active = True
             self.vla_deadline = time.time() + self.vla_timeout_sec
             self.active_vla_task_id = task_id
+            self.post_handoff_speech_published_key = ""
+            self.post_handoff_speech_last_time = 0.0
             self.waiting_for_home_return = False
             self.active_vla_arm = None
             self.active_vla_selected_task = decision.selected_task

@@ -1,0 +1,113 @@
+{
+  "timestamp": "20260604_195928",
+  "model": "/home/hansungai/ze-ri/models/hand_yolo.pt",
+  "model_names": {
+    "0": "hand"
+  },
+  "conf": 0.01,
+  "imgsz": 640,
+  "device": "0",
+  "capture": {
+    "source": "ros",
+    "topic": "/zeri/vla/left/handoff_image",
+    "encoding": "rgb8",
+    "width": 640,
+    "height": 480,
+    "step": 1920
+  },
+  "num_detections": 5,
+  "detections": [
+    {
+      "index": 0,
+      "class_id": 0,
+      "class_name": "hand",
+      "confidence": 0.08247671276330948,
+      "xyxy": [
+        12.56671142578125,
+        0.0,
+        588.9778442382812,
+        480.0
+      ],
+      "width": 576,
+      "height": 480,
+      "center_xy": [
+        301.0,
+        240.0
+      ]
+    },
+    {
+      "index": 1,
+      "class_id": 0,
+      "class_name": "hand",
+      "confidence": 0.02507266029715538,
+      "xyxy": [
+        11.11578369140625,
+        116.41600036621094,
+        640.0,
+        480.0
+      ],
+      "width": 629,
+      "height": 364,
+      "center_xy": [
+        325.5,
+        298.0
+      ]
+    },
+    {
+      "index": 2,
+      "class_id": 0,
+      "class_name": "hand",
+      "confidence": 0.01753249019384384,
+      "xyxy": [
+        0.0,
+        318.94342041015625,
+        487.397216796875,
+        480.0
+      ],
+      "width": 487,
+      "height": 161,
+      "center_xy": [
+        243.5,
+        399.5
+      ]
+    },
+    {
+      "index": 3,
+      "class_id": 0,
+      "class_name": "hand",
+      "confidence": 0.015903256833553314,
+      "xyxy": [
+        0.0,
+        0.0,
+        373.06732177734375,
+        479.963134765625
+      ],
+      "width": 373,
+      "height": 480,
+      "center_xy": [
+        186.5,
+        240.0
+      ]
+    },
+    {
+      "index": 4,
+      "class_id": 0,
+      "class_name": "hand",
+      "confidence": 0.011800185777246952,
+      "xyxy": [
+        339.71221923828125,
+        325.44598388671875,
+        640.0,
+        480.0
+      ],
+      "width": 300,
+      "height": 155,
+      "center_xy": [
+        490.0,
+        402.5
+      ]
+    }
+  ],
+  "raw_image": "/home/hansungai/ze-ri/debug/yolo_handoff/20260604_195928_raw.jpg",
+  "result_image": "/home/hansungai/ze-ri/debug/yolo_handoff/20260604_195928_yolo.jpg"
+}

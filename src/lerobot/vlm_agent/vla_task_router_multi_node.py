@@ -405,14 +405,45 @@ class VlaTaskRouterMultiNode(Node):
         self.get_logger().info(f"[VLA CLIENT STATUS][{arm}] {out.data}")
 
 
+
 def main() -> None:
+    from rclpy.executors import ExternalShutdownException
+
     rclpy.init()
     node = VlaTaskRouterMultiNode()
+
     try:
         rclpy.spin(node)
+
+    except KeyboardInterrupt:
+        pass
+
+    except ExternalShutdownException:
+        # Normal during launch shutdown / Ctrl+C / parent context shutdown.
+        pass
+
+    except Exception as e:
+        msg = str(e)
+        if (
+            "context is not valid" in msg
+            or "rcl_shutdown already called" in msg
+            or "failed to initialize wait set" in msg
+        ):
+            pass
+        else:
+            raise
+
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            node.destroy_node()
+        except Exception:
+            pass
+
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

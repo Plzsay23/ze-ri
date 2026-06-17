@@ -110,6 +110,12 @@ class PersonMapMarkerNode(Node):
         self.declare_parameter("marker_update_alpha", 0.35)
         self.declare_parameter("max_marker_update_jump_m", 1.20)
 
+        # moving/static marker policy
+        self.declare_parameter("moving_speed_threshold_mps", 0.30)
+        self.declare_parameter("static_speed_threshold_mps", 0.10)
+        self.declare_parameter("temporary_marker_ttl_sec", 3.0)
+        self.declare_parameter("persistent_confirm_sec", 2.0)
+
         # marker 표시 설정
         self.declare_parameter("marker_z_mode", "ground")  # ground 또는 detected
         self.declare_parameter("ground_z", 0.05)
@@ -159,6 +165,10 @@ class PersonMapMarkerNode(Node):
         self.update_existing_markers = bool(self.get_parameter("update_existing_markers").value)
         self.marker_update_alpha = float(self.get_parameter("marker_update_alpha").value)
         self.max_marker_update_jump_m = float(self.get_parameter("max_marker_update_jump_m").value)
+        self.moving_speed_threshold_mps = float(self.get_parameter("moving_speed_threshold_mps").value)
+        self.static_speed_threshold_mps = float(self.get_parameter("static_speed_threshold_mps").value)
+        self.temporary_marker_ttl_sec = float(self.get_parameter("temporary_marker_ttl_sec").value)
+        self.persistent_confirm_sec = float(self.get_parameter("persistent_confirm_sec").value)
 
         self.marker_z_mode = str(self.get_parameter("marker_z_mode").value)
         self.ground_z = float(self.get_parameter("ground_z").value)
@@ -302,6 +312,11 @@ class PersonMapMarkerNode(Node):
         try:
             data = json.loads(self.storage_path.read_text())
             self.markers = data.get("markers", [])
+            now = time.time()
+            for m in self.markers:
+                m.setdefault("marker_type", "persistent")
+                m.setdefault("static_since", float(m.get("created_at", now)))
+                m.setdefault("last_type_change", now)
             if self.markers:
                 self.next_id = max(int(m["id"]) for m in self.markers) + 1
             self.get_logger().info(f"loaded {len(self.markers)} fixed person markers")
@@ -504,6 +519,26 @@ class PersonMapMarkerNode(Node):
         m["last_observed_z"] = float(p["z"])
         m["last_match_distance"] = float(distance_m)
 
+        # PERSISTENT_FREEZE_PATCH:
+        # Once a person marker is promoted to persistent, do not downgrade it to
+        # temporary/moving just because the robot rotates and depth/TF estimates jitter.
+        # Keep the rescue target stable. Temporary markers still use motion classification.
+        if str(m.get("marker_type", "persistent")) == "persistent":
+            m["vx"] = 0.0
+            m["vy"] = 0.0
+            m["speed_mps"] = 0.0
+            m["moving"] = False
+            m["static_since"] = float(m.get("static_since", m.get("created_at", now)))
+            m["marker_type"] = "persistent"
+            self.save_storage()
+
+            if int(m["seen_count"]) % 20 == 0:
+                self.get_logger().info(
+                    f"PERSISTENT PERSON MARKER LOCKED id={int(m['id'])} "
+                    f"x={float(m['x']):.2f} y={float(m['y']):.2f}"
+                )
+            return
+
         if self.update_existing_markers and distance_m <= self.max_marker_update_jump_m:
             a = clamp(self.marker_update_alpha, 0.0, 1.0)
             new_x = a * float(p["x"]) + (1.0 - a) * old_x
@@ -521,12 +556,12 @@ class PersonMapMarkerNode(Node):
             m["vx"] = (new_x - old_x) / dt
             m["vy"] = (new_y - old_y) / dt
             m["speed_mps"] = math.hypot(float(m["vx"]), float(m["vy"]))
-            m["moving"] = bool(float(m["speed_mps"]) >= 0.05)
+            self.update_marker_motion_class(m, now)
         else:
             m["vx"] = 0.0
             m["vy"] = 0.0
             m["speed_mps"] = 0.0
-            m["moving"] = False
+            self.update_marker_motion_class(m, now)
 
         self.save_storage()
 
@@ -536,6 +571,64 @@ class PersonMapMarkerNode(Node):
                 f"x={float(m['x']):.2f} y={float(m['y']):.2f} "
                 f"speed={float(m.get('speed_mps', 0.0)):.2f}m/s"
             )
+
+
+    def update_marker_motion_class(self, m, now):
+        speed = float(m.get("speed_mps", 0.0))
+        current_type = str(m.get("marker_type", "temporary"))
+
+        if speed >= self.moving_speed_threshold_mps:
+            m["moving"] = True
+            m["marker_type"] = "temporary"
+            m["static_since"] = 0.0
+            if current_type != "temporary":
+                m["last_type_change"] = now
+            return
+
+        if speed <= self.static_speed_threshold_mps:
+            m["moving"] = False
+            static_since = float(m.get("static_since", 0.0))
+            if static_since <= 0.0:
+                m["static_since"] = now
+                static_since = now
+
+            if now - static_since >= self.persistent_confirm_sec:
+                if current_type != "persistent":
+                    m["last_type_change"] = now
+                m["marker_type"] = "persistent"
+            else:
+                if current_type != "persistent":
+                    m["marker_type"] = "temporary"
+            return
+
+        # uncertain speed zone: keep temporary unless already persistent
+        m["moving"] = False
+        if current_type != "persistent":
+            m["marker_type"] = "temporary"
+
+    def prune_temporary_markers(self):
+        if self.temporary_marker_ttl_sec <= 0.0:
+            return
+
+        now = time.time()
+        before = len(self.markers)
+        self.markers = [
+            m for m in self.markers
+            if str(m.get("marker_type", "persistent")) == "persistent"
+            or now - float(m.get("last_seen", now)) <= self.temporary_marker_ttl_sec
+        ]
+
+        if len(self.markers) != before:
+            self.save_storage()
+
+    def is_persistent_marker(self, m):
+        return str(m.get("marker_type", "persistent")) == "persistent"
+
+    def apply_marker_lifetime(self, marker, m):
+        if not self.is_persistent_marker(m):
+            marker.lifetime = Duration(
+                seconds=max(self.temporary_marker_ttl_sec, 0.5)
+            ).to_msg()
 
     def update_candidates(self, p, det):
         now = time.time()
@@ -617,6 +710,9 @@ class PersonMapMarkerNode(Node):
             "vy": 0.0,
             "speed_mps": 0.0,
             "moving": False,
+            "marker_type": "temporary",
+            "static_since": 0.0,
+            "last_type_change": now,
             "target_frame": self.target_frame,
             "source_frame": str(c.get("source_frame", "")),
             "label": f"PERSON_{self.next_id}",
@@ -684,7 +780,7 @@ class PersonMapMarkerNode(Node):
         marker = Marker()
         marker.header.frame_id = self.target_frame
         marker.header.stamp = stamp
-        marker.ns = "fixed_person_positions"
+        marker.ns = "fixed_person_positions" if self.is_persistent_marker(m) else "temporary_person_positions"
         marker.id = int(m["id"])
         marker.type = Marker.SPHERE
         marker.action = Marker.ADD
@@ -704,14 +800,15 @@ class PersonMapMarkerNode(Node):
         marker.color.b = 0.05
         marker.color.a = 0.95
 
-        # lifetime 0 = 계속 유지. 노드가 계속 재발행함.
+        # persistent는 lifetime 0, temporary는 TTL 뒤 RViz에서 자연 삭제.
+        self.apply_marker_lifetime(marker, m)
         return marker
 
     def make_text_marker(self, m, stamp):
         marker = Marker()
         marker.header.frame_id = self.target_frame
         marker.header.stamp = stamp
-        marker.ns = "fixed_person_labels"
+        marker.ns = "fixed_person_labels" if self.is_persistent_marker(m) else "temporary_person_labels"
         marker.id = 100000 + int(m["id"])
         marker.type = Marker.TEXT_VIEW_FACING
         marker.action = Marker.ADD
@@ -729,15 +826,16 @@ class PersonMapMarkerNode(Node):
         marker.color.b = 1.0
         marker.color.a = 1.0
 
-        marker.text = f"PERSON {int(m['id'])}"
+        marker.text = f"PERSON {int(m['id'])} {str(m.get('marker_type', 'persistent')).upper()} {float(m.get('speed_mps', 0.0)):.2f}m/s"
 
+        self.apply_marker_lifetime(marker, m)
         return marker
 
     def make_body_marker(self, m, stamp):
         marker = Marker()
         marker.header.frame_id = self.target_frame
         marker.header.stamp = stamp
-        marker.ns = "fixed_person_bodies"
+        marker.ns = "fixed_person_bodies" if self.is_persistent_marker(m) else "temporary_person_bodies"
         marker.id = 200000 + int(m["id"])
         marker.type = Marker.CYLINDER
         marker.action = Marker.ADD
@@ -759,9 +857,11 @@ class PersonMapMarkerNode(Node):
         marker.color.g = 0.25
         marker.color.b = 0.05
         marker.color.a = 0.32
+        self.apply_marker_lifetime(marker, m)
         return marker
 
     def publish_markers(self):
+        self.prune_temporary_markers()
         stamp = self.get_clock().now().to_msg()
         arr = MarkerArray()
 
